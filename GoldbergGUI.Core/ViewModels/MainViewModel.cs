@@ -466,22 +466,42 @@ namespace GoldbergGUI.Core.ViewModels
             StatusText = "Ready.";
         }
 
-        public IMvxCommand ResetConfigCommand => new MvxAsyncCommand(ResetConfig);
+        public IMvxCommand RevertCommand => new MvxAsyncCommand(RevertConfig);
 
-        private async Task ResetConfig()
+        private async Task RevertConfig()
         {
-            var globalConfiguration = await _goldberg.GetGlobalSettings().ConfigureAwait(false);
-            AccountName = globalConfiguration.AccountName;
-            SteamId = globalConfiguration.UserSteamId;
-            SelectedLanguage = globalConfiguration.Language;
-            if (!DllSelected) return;
+            if (!DllSelected)
+            {
+                StatusText = "No DLL selected! Ready.";
+                return;
+            }
 
-            _log.Info("Reset form...");
+            if (!GetDllPathDir(out var dirPath)) return;
+
+            var confirm = MessageBox.Show(
+                "This will remove all Goldberg files and restore the original Steam API DLL.\n\n" +
+                "Are you sure?",
+                "Revert Changes",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (confirm != MessageBoxResult.Yes) return;
+
             MainWindowEnabled = false;
-            StatusText = "Resetting...";
-            await ReadConfig().ConfigureAwait(false);
+            StatusText = "Reverting...";
+            await _goldberg.Revert(dirPath).ConfigureAwait(false);
+            GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+
+            // Reset the form fields to reflect the clean state
+            AppId = -1;
+            Achievements = new ObservableCollection<Achievement>();
+            DLCs = new ObservableCollection<DlcApp>();
+            Offline = false;
+            DisableNetworking = false;
+            DisableOverlay = false;
+
             MainWindowEnabled = true;
-            StatusText = "Ready.";
+            StatusText = "Reverted successfully! Ready.";
         }
 
         public IMvxCommand GenerateSteamInterfacesCommand => new MvxAsyncCommand(GenerateSteamInterfaces);
@@ -553,7 +573,7 @@ namespace GoldbergGUI.Core.ViewModels
             }
 
             var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "Goldberg SteamEmu Saves", "settings");
+                "GSE Saves", "settings");
             var start = Process.Start("explorer.exe", path);
             start?.Dispose();
         }
