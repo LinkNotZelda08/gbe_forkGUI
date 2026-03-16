@@ -1,3 +1,8 @@
+#gbe_forkGUI
+
+Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) modified to use Detanup01's [gbe_fork](https://github.com/Detanup01/gbe_fork)
+Below is Jeddunk's unmodified readme from GoldbergGUI
+
 # GoldbergGUI
 
 Set up any game with Goldberg's emulator easily and automatically.
