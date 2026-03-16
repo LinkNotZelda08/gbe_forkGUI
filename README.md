@@ -1,7 +1,6 @@
 # gbe_forkGUI
 
-Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) modified to use Detanup01's [gbe_fork](https://github.com/Detanup01/gbe_fork)
-Below is Jeddunk's unmodified readme from GoldbergGUI
+Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) modified to use Detanup01's [gbe_fork](https://github.com/Detanup01/gbe_fork. Below is Jeddunk's unmodified readme from GoldbergGUI
 
 # GoldbergGUI
 
