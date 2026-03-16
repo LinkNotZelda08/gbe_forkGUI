@@ -1,6 +1,6 @@
 # gbe_forkGUI
 
-Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) modified to use Detanup01's [gbe_fork](https://github.com/Detanup01/gbe_fork). Below is Jeddunk's unmodified readme from GoldbergGUI
+Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) modified to use Detanup01's [gbe_fork](https://github.com/Detanup01/gbe_fork). The vast majority of this project was done using Claude AI. I'm not a programmer or computer scientist, just an average guy who likes GoldbergGUI and wanted to keep using it. Below is Jeddunk's unmodified readme from GoldbergGUI.
 
 # GoldbergGUI
 
