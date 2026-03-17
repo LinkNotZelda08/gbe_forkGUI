@@ -567,6 +567,17 @@ namespace GoldbergGUI.Core.Services
         public async Task<bool> Revert(string path)
         {
             _log.Info($"Reverting Goldberg changes in {path}...");
+
+            // Read the AppID before we delete steam_settings so we know which GSE Saves to clean up
+            var appId = -1;
+            var steamAppidInSettings = Path.Combine(path, "steam_settings", "steam_appid.txt");
+            var steamAppidLegacy     = Path.Combine(path, "steam_appid.txt");
+            var appIdFile = File.Exists(steamAppidInSettings) ? steamAppidInSettings
+                          : File.Exists(steamAppidLegacy)     ? steamAppidLegacy
+                          : null;
+            if (appIdFile != null)
+                int.TryParse(File.ReadLines(appIdFile).First().Trim(), out appId);
+
             await Task.Run(() =>
             {
                 // Restore original steam_api.dll if backup exists
@@ -579,9 +590,7 @@ namespace GoldbergGUI.Core.Services
                     if (File.Exists(originalDll))
                     {
                         _log.Info($"Restoring original {name}.dll...");
-                        // Delete the Goldberg DLL currently in place
                         if (File.Exists(currentDll)) File.Delete(currentDll);
-                        // Restore the original
                         File.Move(originalDll, currentDll);
                         _log.Info($"Restored {name}.dll.");
                     }
@@ -608,6 +617,18 @@ namespace GoldbergGUI.Core.Services
                 {
                     _log.Info("Removing steam_appid.txt...");
                     File.Delete(steamAppId);
+                }
+
+                // Remove GSE Saves achievements for this game
+                if (appId > 0)
+                {
+                    var userAchievementsPath = Path.Combine(GlobalSettingsPath, appId.ToString(),
+                        "achievements.json");
+                    if (File.Exists(userAchievementsPath))
+                    {
+                        _log.Info("Removing GSE Saves achievements...");
+                        File.Delete(userAchievementsPath);
+                    }
                 }
             }).ConfigureAwait(false);
 
