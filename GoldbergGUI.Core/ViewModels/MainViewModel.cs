@@ -31,7 +31,9 @@ namespace GoldbergGUI.Core.ViewModels
 
         //private SteamApp _currentGame;
         private ObservableCollection<Achievement> _achievements;
+        private bool? _allAchievementsUnlocked = false;
         private ObservableCollection<DlcApp> _dlcs;
+        private bool? _allDlcEnabled = true;
         private string _accountName;
         private long _steamId;
         private bool _offline;
@@ -136,11 +138,53 @@ namespace GoldbergGUI.Core.ViewModels
             get => _dlcs;
             set
             {
+                // Unsubscribe from old items
+                if (_dlcs != null)
+                    foreach (var dlc in _dlcs)
+                        dlc.PropertyChanged -= OnDlcPropertyChanged;
+
                 _dlcs = value;
+
+                // Subscribe to new items so header updates when individual rows change
+                if (_dlcs != null)
+                    foreach (var dlc in _dlcs)
+                        dlc.PropertyChanged += OnDlcPropertyChanged;
+
                 RaisePropertyChanged(() => DLCs);
-                /*RaisePropertyChanged(() => DllSelected);
-                RaisePropertyChanged(() => SteamInterfacesTxtExists);*/
+                UpdateAllDlcEnabledState();
             }
+        }
+
+        private void OnDlcPropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(DlcApp.Enabled))
+                UpdateAllDlcEnabledState();
+        }
+
+        public bool? AllDlcEnabled
+        {
+            get => _allDlcEnabled;
+            set
+            {
+                // If currently all-on or mixed, turn everything off. If all-off, turn everything on.
+                bool newValue = (_allDlcEnabled == true) ? false : true;
+                _allDlcEnabled = newValue;
+                RaisePropertyChanged(() => AllDlcEnabled);
+                SetAllDlcEnabled(newValue);
+            }
+        }
+
+        private void UpdateAllDlcEnabledState()
+        {
+            if (_dlcs == null || _dlcs.Count == 0)
+                _allDlcEnabled = true;
+            else if (_dlcs.All(x => x.Enabled))
+                _allDlcEnabled = true;
+            else if (_dlcs.All(x => !x.Enabled))
+                _allDlcEnabled = false;
+            else
+                _allDlcEnabled = null; // mixed = indeterminate (small box)
+            RaisePropertyChanged(() => AllDlcEnabled);
         }
 
         public ObservableCollection<Achievement> Achievements
@@ -148,9 +192,64 @@ namespace GoldbergGUI.Core.ViewModels
             get => _achievements;
             set
             {
+                if (_achievements != null)
+                    foreach (var a in _achievements)
+                        a.PropertyChanged -= OnAchievementPropertyChanged;
+
                 _achievements = value;
+
+                if (_achievements != null)
+                    foreach (var a in _achievements)
+                        a.PropertyChanged += OnAchievementPropertyChanged;
+
                 RaisePropertyChanged(() => Achievements);
+                UpdateAllAchievementsUnlockedState();
             }
+        }
+
+        public bool? AllAchievementsUnlocked
+        {
+            get => _allAchievementsUnlocked;
+            set
+            {
+                bool newValue = (_allAchievementsUnlocked == true) ? false : true;
+                _allAchievementsUnlocked = newValue;
+                RaisePropertyChanged(() => AllAchievementsUnlocked);
+                SetAllAchievementsUnlocked(newValue);
+            }
+        }
+
+        private void OnAchievementPropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(Achievement.Unlocked))
+                UpdateAllAchievementsUnlockedState();
+        }
+
+        private void UpdateAllAchievementsUnlockedState()
+        {
+            if (_achievements == null || _achievements.Count == 0)
+                _allAchievementsUnlocked = false;
+            else if (_achievements.All(x => x.Unlocked))
+                _allAchievementsUnlocked = true;
+            else if (_achievements.All(x => !x.Unlocked))
+                _allAchievementsUnlocked = false;
+            else
+                _allAchievementsUnlocked = null;
+            RaisePropertyChanged(() => AllAchievementsUnlocked);
+        }
+
+        private void SetAllAchievementsUnlocked(bool unlocked)
+        {
+            if (_achievements == null) return;
+            foreach (var a in _achievements)
+                a.PropertyChanged -= OnAchievementPropertyChanged;
+            foreach (var a in _achievements)
+                a.Unlocked = unlocked;
+            foreach (var a in _achievements)
+                a.PropertyChanged += OnAchievementPropertyChanged;
+            _allAchievementsUnlocked = unlocked;
+            RaisePropertyChanged(() => AllAchievementsUnlocked);
+            Achievements = new ObservableCollection<Achievement>(Achievements);
         }
 
         public string AccountName
@@ -407,6 +506,25 @@ namespace GoldbergGUI.Core.ViewModels
         }
 
         public IMvxCommand GetListOfDlcCommand => new MvxAsyncCommand(GetListOfDlc);
+
+        public IMvxCommand SelectAllDlcCommand => new MvxCommand(() => SetAllDlcEnabled(true));
+        public IMvxCommand DeselectAllDlcCommand => new MvxCommand(() => SetAllDlcEnabled(false));
+
+        private void SetAllDlcEnabled(bool enabled)
+        {
+            if (DLCs == null) return;
+            // Temporarily unsubscribe to avoid UpdateAllDlcEnabledState firing on every item
+            foreach (var dlc in DLCs)
+                dlc.PropertyChanged -= OnDlcPropertyChanged;
+            foreach (var dlc in DLCs)
+                dlc.Enabled = enabled;
+            foreach (var dlc in DLCs)
+                dlc.PropertyChanged += OnDlcPropertyChanged;
+            _allDlcEnabled = enabled;
+            RaisePropertyChanged(() => AllDlcEnabled);
+            // Refresh the DataGrid so checkboxes redraw
+            DLCs = new ObservableCollection<DlcApp>(DLCs);
+        }
 
         private async Task GetListOfDlc()
         {

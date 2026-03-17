@@ -67,8 +67,13 @@ namespace GoldbergGUI.Core.Models
         public GoldbergGlobalConfiguration OverwrittenGlobalConfiguration { get; set; }
     }
 
-    public class DlcApp : SteamApp
+    public class DlcApp : SteamApp, System.ComponentModel.INotifyPropertyChanged
     {
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+
+        private void NotifyPropertyChanged(string propertyName) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
+
         public DlcApp() { }
 
         public DlcApp(SteamApp steamApp)
@@ -79,12 +84,28 @@ namespace GoldbergGUI.Core.Models
             AppType = steamApp.AppType;
             LastModified = steamApp.LastModified;
             PriceChangeNumber = steamApp.PriceChangeNumber;
+            Enabled = true;
         }
 
         /// <summary>
         /// Path to DLC (relative to Steam API DLL) (optional)
         /// </summary>
         public string AppPath { get; set; }
+
+        private bool _enabled = true;
+        /// <summary>
+        /// Whether this DLC is enabled (will be written to config). Defaults to true.
+        /// </summary>
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value) return;
+                _enabled = value;
+                NotifyPropertyChanged(nameof(Enabled));
+            }
+        }
     }
 
     public class Group
@@ -103,8 +124,13 @@ namespace GoldbergGUI.Core.Models
         public int AppId { get; set; }
     }
 
-    public class Achievement
+    public class Achievement : System.ComponentModel.INotifyPropertyChanged
     {
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+
+        private void NotifyPropertyChanged(string propertyName) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
+
         /// <summary>
         /// Achievement description.
         /// </summary>
@@ -118,9 +144,10 @@ namespace GoldbergGUI.Core.Models
         public string DisplayName { get; set; }
 
         /// <summary>
-        /// Is achievement hidden? 0 = false, else true.
+        /// Is achievement hidden? 0 = false, else true. Stored as string in some versions.
         /// </summary>
         [JsonPropertyName("hidden")]
+        [JsonConverter(typeof(HiddenConverter))]
         public int Hidden { get; set; }
 
         /// <summary>
@@ -141,6 +168,22 @@ namespace GoldbergGUI.Core.Models
         /// </summary>
         [JsonPropertyName("name")]
         public string Name { get; set; }
+
+        private bool _unlocked = false;
+        /// <summary>
+        /// Whether this achievement is unlocked. Not persisted to JSON.
+        /// </summary>
+        [JsonIgnore]
+        public bool Unlocked
+        {
+            get => _unlocked;
+            set
+            {
+                if (_unlocked == value) return;
+                _unlocked = value;
+                NotifyPropertyChanged(nameof(Unlocked));
+            }
+        }
     }
 
     public class Item
@@ -275,6 +318,26 @@ namespace GoldbergGUI.Core.Models
             Int,
             Float,
             AvgRate
+        }
+    }
+
+        public class HiddenConverter : System.Text.Json.Serialization.JsonConverter<int>
+    {
+        public override int Read(ref System.Text.Json.Utf8JsonReader reader, Type typeToConvert,
+            System.Text.Json.JsonSerializerOptions options)
+        {
+            if (reader.TokenType == System.Text.Json.JsonTokenType.String)
+            {
+                var str = reader.GetString();
+                return int.TryParse(str, out var val) ? val : 0;
+            }
+            return reader.GetInt32();
+        }
+
+        public override void Write(System.Text.Json.Utf8JsonWriter writer, int value,
+            System.Text.Json.JsonSerializerOptions options)
+        {
+            writer.WriteStringValue(value.ToString());
         }
     }
 }

@@ -232,13 +232,34 @@ namespace GoldbergGUI.Core.Services
                 _log.Info("steam_appid.txt missing! Skipping...");
             }
 
-            // achievements.json — format unchanged in gbe_fork
+            // achievements.json — defines achievement metadata
             var achievementJson = Path.Combine(path, "steam_settings", "achievements.json");
             if (File.Exists(achievementJson))
             {
                 _log.Info("Getting achievements...");
                 var json = await File.ReadAllTextAsync(achievementJson).ConfigureAwait(false);
                 achievementList = System.Text.Json.JsonSerializer.Deserialize<List<Achievement>>(json);
+
+                // Also read unlock state from GSE Saves/<AppId>/achievements.json
+                if (appId > 0)
+                {
+                    var userAchievementsPath = Path.Combine(GlobalSettingsPath, appId.ToString(),
+                        "achievements.json");
+                    if (File.Exists(userAchievementsPath))
+                    {
+                        _log.Info("Reading unlocked achievements from GSE Saves...");
+                        var userJson = await File.ReadAllTextAsync(userAchievementsPath).ConfigureAwait(false);
+                        var userDoc = System.Text.Json.JsonDocument.Parse(userJson);
+                        foreach (var achievement in achievementList)
+                        {
+                            if (userDoc.RootElement.TryGetProperty(achievement.Name, out var achEl) &&
+                                achEl.TryGetProperty("earned", out var earned))
+                            {
+                                achievement.Unlocked = earned.GetBoolean();
+                            }
+                        }
+                    }
+                }
             }
             else
             {
@@ -259,7 +280,13 @@ namespace GoldbergGUI.Core.Services
                     if (ini.TryGetValue("app::dlcs", out var dlcs))
                         foreach (var kv in dlcs)
                             if (int.TryParse(kv.Key, out var dlcId))
-                                dlcList.Add(new DlcApp { AppId = dlcId, Name = kv.Value });
+                                dlcList.Add(new DlcApp { AppId = dlcId, Name = kv.Value, Enabled = true });
+
+                    // Read disabled DLCs (stored separately so they can be re-enabled later)
+                    if (ini.TryGetValue("app::dlcs_disabled", out var disabledDlcs))
+                        foreach (var kv in disabledDlcs)
+                            if (int.TryParse(kv.Key, out var dlcId))
+                                dlcList.Add(new DlcApp { AppId = dlcId, Name = kv.Value, Enabled = false });
 
                     if (ini.TryGetValue("app::paths", out var paths))
                         foreach (var kv in paths)
@@ -282,7 +309,8 @@ namespace GoldbergGUI.Core.Services
                         dlcList.Add(new DlcApp
                         {
                             AppId = Convert.ToInt32(match.Groups["id"].Value),
-                            Name  = match.Groups["n"].Value
+                            Name  = match.Groups["n"].Value,
+                            Enabled = true
                         });
                 }
                 if (File.Exists(appPathTxt))
@@ -392,6 +420,29 @@ namespace GoldbergGUI.Core.Services
                     Path.Combine(settingsDir, "achievements.json"), achievementJson
                 ).ConfigureAwait(false);
                 _log.Info("Finished saving achievements.");
+
+                // Save unlock state to GSE Saves/<AppId>/achievements.json
+                // Format: { "ACH_NAME": { "earned": true/false, "earned_time": 0 }, ... }
+                if (c.AppId > 0)
+                {
+                    var userSavesDir = Path.Combine(GlobalSettingsPath, c.AppId.ToString());
+                    Directory.CreateDirectory(userSavesDir);
+                    var userAchievementsPath = Path.Combine(userSavesDir, "achievements.json");
+                    var sb = new StringBuilder();
+                    sb.AppendLine("{");
+                    for (int i = 0; i < c.Achievements.Count; i++)
+                    {
+                        var ach = c.Achievements[i];
+                        var comma = i < c.Achievements.Count - 1 ? "," : "";
+                        sb.AppendLine($"  \"{ach.Name}\": {{");
+                        sb.AppendLine($"    \"earned\": {(ach.Unlocked ? "true" : "false")},");
+                        sb.AppendLine($"    \"earned_time\": {(ach.Unlocked ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() : 0)}");
+                        sb.AppendLine($"  }}{comma}");
+                    }
+                    sb.AppendLine("}");
+                    await File.WriteAllTextAsync(userAchievementsPath, sb.ToString()).ConfigureAwait(false);
+                    _log.Info("Saved unlock state to GSE Saves.");
+                }
             }
             else
             {
@@ -403,18 +454,34 @@ namespace GoldbergGUI.Core.Services
                 _log.Info("Removed achievement files.");
             }
 
-            // ---- configs.app.ini ([app::dlcs] + [app::paths]) ----
+            // ---- configs.app.ini ([app::dlcs] + [app::dlcs_disabled] + [app::paths]) ----
             var configsAppPath = Path.Combine(settingsDir, "configs.app.ini");
             if (c.DlcList.Count > 0)
             {
                 _log.Info("Saving DLC settings to configs.app.ini...");
                 var sb = new StringBuilder();
+
+                var enabledDlcs  = c.DlcList.Where(x => x.Enabled).ToList();
+                var disabledDlcs = c.DlcList.Where(x => !x.Enabled).ToList();
+
+                // Only enabled DLCs go into [app::dlcs] — gbe_fork reads these
+                // unlock_all=0 tells gbe_fork to only unlock the listed DLCs
                 sb.AppendLine("[app::dlcs]");
-                foreach (var dlc in c.DlcList)
+                sb.AppendLine("unlock_all=0");
+                foreach (var dlc in enabledDlcs)
                     sb.AppendLine($"{dlc.AppId}={dlc.Name}");
                 sb.AppendLine();
 
-                var appPaths = c.DlcList.Where(x => !string.IsNullOrEmpty(x.AppPath)).ToList();
+                // Disabled DLCs stored separately so they survive a reload and can be re-enabled
+                if (disabledDlcs.Count > 0)
+                {
+                    sb.AppendLine("[app::dlcs_disabled]");
+                    foreach (var dlc in disabledDlcs)
+                        sb.AppendLine($"{dlc.AppId}={dlc.Name}");
+                    sb.AppendLine();
+                }
+
+                var appPaths = c.DlcList.Where(x => x.Enabled && !string.IsNullOrEmpty(x.AppPath)).ToList();
                 if (appPaths.Count > 0)
                 {
                     sb.AppendLine("[app::paths]");
