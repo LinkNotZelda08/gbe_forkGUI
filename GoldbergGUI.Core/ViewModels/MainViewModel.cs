@@ -1,4 +1,4 @@
-﻿using GoldbergGUI.Core.Models;
+using GoldbergGUI.Core.Models;
 using GoldbergGUI.Core.Services;
 using GoldbergGUI.Core.Utils;
 using Microsoft.Win32;
@@ -23,13 +23,22 @@ namespace GoldbergGUI.Core.ViewModels
     // ReSharper disable once ClassNeverInstantiated.Global
     public class MainViewModel : MvxNavigationViewModel
     {
+        // -----------------------------------------------------------------------
+        // Services & infrastructure
+        // -----------------------------------------------------------------------
+        private readonly ISteamService _steam;
+        private readonly IGoldbergService _goldberg;
+        private readonly IThemeService _theme;
+        private readonly IMvxLog _log;
+        private readonly IMvxLogProvider _logProvider;
         private readonly IMvxNavigationService _navigationService;
+
+        // -----------------------------------------------------------------------
+        // Backing fields
+        // -----------------------------------------------------------------------
         private string _dllPath;
         private string _gameName;
-
         private int _appId;
-
-        //private SteamApp _currentGame;
         private ObservableCollection<Achievement> _achievements;
         private bool? _allAchievementsUnlocked = false;
         private ObservableCollection<DlcApp> _dlcs;
@@ -39,20 +48,17 @@ namespace GoldbergGUI.Core.ViewModels
         private bool _offline;
         private bool _disableNetworking;
         private bool _disableOverlay;
-
         private string _statusText;
-
-        private readonly ISteamService _steam;
-        private readonly IGoldbergService _goldberg;
-        private readonly IThemeService _theme;
-        private readonly IMvxLog _log;
         private bool _mainWindowEnabled;
         private bool _goldbergApplied;
         private ObservableCollection<string> _steamLanguages;
         private string _selectedLanguage;
         private ObservableCollection<string> _themes;
         private string _selectedTheme;
-        private readonly IMvxLogProvider _logProvider;
+
+        // Placeholder sentinel so we can tell whether a real path has been set
+        private const string DllPathPlaceholder = "Path to game's steam_api(64).dll...";
+        private const string GameNamePlaceholder = "Game name...";
 
         public MainViewModel(ISteamService steam, IGoldbergService goldberg, IThemeService theme,
             IMvxLogProvider logProvider, IMvxNavigationService navigationService)
@@ -66,33 +72,38 @@ namespace GoldbergGUI.Core.ViewModels
             _navigationService = navigationService;
         }
 
+        // -----------------------------------------------------------------------
+        // Lifecycle
+        // -----------------------------------------------------------------------
+
         public override void Prepare()
         {
             base.Prepare();
             Task.Run(async () =>
             {
-                //var errorDuringInit = false;
                 MainWindowEnabled = false;
                 StatusText = "Initializing! Please wait...";
                 try
                 {
                     SteamLanguages = new ObservableCollection<string>(_goldberg.Languages());
                     Themes = new ObservableCollection<string>(_theme.Themes);
+
                     var savedTheme = _theme.LoadSavedTheme();
                     _theme.ApplyTheme(savedTheme);
                     _selectedTheme = savedTheme;
                     RaisePropertyChanged(() => SelectedTheme);
+
                     ResetForm();
+
                     await _steam.Initialize(_logProvider.GetLogFor<SteamService>()).ConfigureAwait(false);
-                    var globalConfiguration =
-                        await _goldberg.Initialize(_logProvider.GetLogFor<GoldbergService>()).ConfigureAwait(false);
-                    AccountName = globalConfiguration.AccountName;
-                    SteamId = globalConfiguration.UserSteamId;
-                    SelectedLanguage = globalConfiguration.Language;
+                    var globalConfig = await _goldberg.Initialize(_logProvider.GetLogFor<GoldbergService>()).ConfigureAwait(false);
+
+                    AccountName = globalConfig.AccountName;
+                    SteamId = globalConfig.UserSteamId;
+                    SelectedLanguage = globalConfig.Language;
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine(e);
                     _log.Error(e.Message);
                     throw;
                 }
@@ -107,7 +118,9 @@ namespace GoldbergGUI.Core.ViewModels
             await base.Initialize().ConfigureAwait(false);
         }
 
-        // PROPERTIES //
+        // -----------------------------------------------------------------------
+        // Properties — game / DLL
+        // -----------------------------------------------------------------------
 
         public string DllPath
         {
@@ -142,27 +155,47 @@ namespace GoldbergGUI.Core.ViewModels
             }
         }
 
+        // -----------------------------------------------------------------------
+        // Properties — DLC
+        // -----------------------------------------------------------------------
+
         // ReSharper disable once InconsistentNaming
         public ObservableCollection<DlcApp> DLCs
         {
             get => _dlcs;
             set
             {
-                // Unsubscribe from old items
-                if (_dlcs != null)
-                    foreach (var dlc in _dlcs)
-                        dlc.PropertyChanged -= OnDlcPropertyChanged;
-
+                UnsubscribeDlcEvents(_dlcs);
                 _dlcs = value;
-
-                // Subscribe to new items so header updates when individual rows change
-                if (_dlcs != null)
-                    foreach (var dlc in _dlcs)
-                        dlc.PropertyChanged += OnDlcPropertyChanged;
-
+                SubscribeDlcEvents(_dlcs);
                 RaisePropertyChanged(() => DLCs);
                 UpdateAllDlcEnabledState();
             }
+        }
+
+        public bool? AllDlcEnabled
+        {
+            get => _allDlcEnabled;
+            set
+            {
+                // Toggle: all-on or mixed → turn everything off; all-off → turn everything on.
+                bool newValue = _allDlcEnabled != true;
+                _allDlcEnabled = newValue;
+                RaisePropertyChanged(() => AllDlcEnabled);
+                SetAllDlcEnabled(newValue);
+            }
+        }
+
+        private void SubscribeDlcEvents(IEnumerable<DlcApp> items)
+        {
+            if (items == null) return;
+            foreach (var dlc in items) dlc.PropertyChanged += OnDlcPropertyChanged;
+        }
+
+        private void UnsubscribeDlcEvents(IEnumerable<DlcApp> items)
+        {
+            if (items == null) return;
+            foreach (var dlc in items) dlc.PropertyChanged -= OnDlcPropertyChanged;
         }
 
         private void OnDlcPropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -171,47 +204,40 @@ namespace GoldbergGUI.Core.ViewModels
                 UpdateAllDlcEnabledState();
         }
 
-        public bool? AllDlcEnabled
-        {
-            get => _allDlcEnabled;
-            set
-            {
-                // If currently all-on or mixed, turn everything off. If all-off, turn everything on.
-                bool newValue = (_allDlcEnabled == true) ? false : true;
-                _allDlcEnabled = newValue;
-                RaisePropertyChanged(() => AllDlcEnabled);
-                SetAllDlcEnabled(newValue);
-            }
-        }
-
         private void UpdateAllDlcEnabledState()
         {
-            if (_dlcs == null || _dlcs.Count == 0)
-                _allDlcEnabled = true;
-            else if (_dlcs.All(x => x.Enabled))
-                _allDlcEnabled = true;
-            else if (_dlcs.All(x => !x.Enabled))
-                _allDlcEnabled = false;
-            else
-                _allDlcEnabled = null; // mixed = indeterminate (small box)
+            _allDlcEnabled = (_dlcs == null || _dlcs.Count == 0) ? true
+                           : _dlcs.All(x => x.Enabled)          ? true
+                           : _dlcs.All(x => !x.Enabled)         ? false
+                           : (bool?)null; // mixed → indeterminate
             RaisePropertyChanged(() => AllDlcEnabled);
         }
+
+        private void SetAllDlcEnabled(bool enabled)
+        {
+            if (DLCs == null) return;
+            // Unsubscribe while bulk-updating to avoid per-item state recalculation
+            UnsubscribeDlcEvents(DLCs);
+            foreach (var dlc in DLCs) dlc.Enabled = enabled;
+            SubscribeDlcEvents(DLCs);
+            _allDlcEnabled = enabled;
+            RaisePropertyChanged(() => AllDlcEnabled);
+            // Reassign to force DataGrid checkboxes to redraw
+            DLCs = new ObservableCollection<DlcApp>(DLCs);
+        }
+
+        // -----------------------------------------------------------------------
+        // Properties — Achievements
+        // -----------------------------------------------------------------------
 
         public ObservableCollection<Achievement> Achievements
         {
             get => _achievements;
             set
             {
-                if (_achievements != null)
-                    foreach (var a in _achievements)
-                        a.PropertyChanged -= OnAchievementPropertyChanged;
-
+                UnsubscribeAchievementEvents(_achievements);
                 _achievements = value;
-
-                if (_achievements != null)
-                    foreach (var a in _achievements)
-                        a.PropertyChanged += OnAchievementPropertyChanged;
-
+                SubscribeAchievementEvents(_achievements);
                 RaisePropertyChanged(() => Achievements);
                 UpdateAllAchievementsUnlockedState();
             }
@@ -222,11 +248,23 @@ namespace GoldbergGUI.Core.ViewModels
             get => _allAchievementsUnlocked;
             set
             {
-                bool newValue = (_allAchievementsUnlocked == true) ? false : true;
+                bool newValue = _allAchievementsUnlocked != true;
                 _allAchievementsUnlocked = newValue;
                 RaisePropertyChanged(() => AllAchievementsUnlocked);
                 SetAllAchievementsUnlocked(newValue);
             }
+        }
+
+        private void SubscribeAchievementEvents(IEnumerable<Achievement> items)
+        {
+            if (items == null) return;
+            foreach (var a in items) a.PropertyChanged += OnAchievementPropertyChanged;
+        }
+
+        private void UnsubscribeAchievementEvents(IEnumerable<Achievement> items)
+        {
+            if (items == null) return;
+            foreach (var a in items) a.PropertyChanged -= OnAchievementPropertyChanged;
         }
 
         private void OnAchievementPropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -237,148 +275,97 @@ namespace GoldbergGUI.Core.ViewModels
 
         private void UpdateAllAchievementsUnlockedState()
         {
-            if (_achievements == null || _achievements.Count == 0)
-                _allAchievementsUnlocked = false;
-            else if (_achievements.All(x => x.Unlocked))
-                _allAchievementsUnlocked = true;
-            else if (_achievements.All(x => !x.Unlocked))
-                _allAchievementsUnlocked = false;
-            else
-                _allAchievementsUnlocked = null;
+            _allAchievementsUnlocked = (_achievements == null || _achievements.Count == 0) ? false
+                                     : _achievements.All(x => x.Unlocked)                 ? true
+                                     : _achievements.All(x => !x.Unlocked)                ? false
+                                     : (bool?)null; // mixed → indeterminate
             RaisePropertyChanged(() => AllAchievementsUnlocked);
         }
 
         private void SetAllAchievementsUnlocked(bool unlocked)
         {
             if (_achievements == null) return;
-            foreach (var a in _achievements)
-                a.PropertyChanged -= OnAchievementPropertyChanged;
-            foreach (var a in _achievements)
-                a.Unlocked = unlocked;
-            foreach (var a in _achievements)
-                a.PropertyChanged += OnAchievementPropertyChanged;
+            UnsubscribeAchievementEvents(_achievements);
+            foreach (var a in _achievements) a.Unlocked = unlocked;
+            SubscribeAchievementEvents(_achievements);
             _allAchievementsUnlocked = unlocked;
             RaisePropertyChanged(() => AllAchievementsUnlocked);
+            // Reassign to force DataGrid to redraw
             Achievements = new ObservableCollection<Achievement>(Achievements);
         }
+
+        // -----------------------------------------------------------------------
+        // Properties — global settings
+        // -----------------------------------------------------------------------
 
         public string AccountName
         {
             get => _accountName;
-            set
-            {
-                _accountName = value;
-                RaisePropertyChanged(() => AccountName);
-            }
+            set { _accountName = value; RaisePropertyChanged(() => AccountName); }
         }
 
         public long SteamId
         {
             get => _steamId;
-            set
-            {
-                _steamId = value;
-                RaisePropertyChanged(() => SteamId);
-            }
+            set { _steamId = value; RaisePropertyChanged(() => SteamId); }
         }
 
         public bool Offline
         {
             get => _offline;
-            set
-            {
-                _offline = value;
-                RaisePropertyChanged(() => Offline);
-            }
+            set { _offline = value; RaisePropertyChanged(() => Offline); }
         }
 
         public bool DisableNetworking
         {
             get => _disableNetworking;
-            set
-            {
-                _disableNetworking = value;
-                RaisePropertyChanged(() => DisableNetworking);
-            }
+            set { _disableNetworking = value; RaisePropertyChanged(() => DisableNetworking); }
         }
 
         public bool DisableOverlay
         {
             get => _disableOverlay;
-            set
-            {
-                _disableOverlay = value;
-                RaisePropertyChanged(() => DisableOverlay);
-            }
+            set { _disableOverlay = value; RaisePropertyChanged(() => DisableOverlay); }
         }
+
+        // -----------------------------------------------------------------------
+        // Properties — UI state
+        // -----------------------------------------------------------------------
 
         public bool MainWindowEnabled
         {
             get => _mainWindowEnabled;
-            set
-            {
-                _mainWindowEnabled = value;
-                RaisePropertyChanged(() => MainWindowEnabled);
-            }
+            set { _mainWindowEnabled = value; RaisePropertyChanged(() => MainWindowEnabled); }
         }
 
         public bool GoldbergApplied
         {
             get => _goldbergApplied;
-            set
-            {
-                _goldbergApplied = value;
-                RaisePropertyChanged(() => GoldbergApplied);
-            }
+            set { _goldbergApplied = value; RaisePropertyChanged(() => GoldbergApplied); }
         }
 
-        public bool SteamInterfacesTxtExists
+        public string StatusText
         {
-            get
-            {
-                var dllPathDirExists = GetDllPathDir(out var dirPath);
-                return dllPathDirExists && !File.Exists(Path.Combine(dirPath, "steam_interfaces.txt"));
-            }
-        }
-
-        public bool DllSelected
-        {
-            get
-            {
-                var value = !DllPath.Contains("Path to game's steam_api(64).dll");
-                if (!value) _log.Warn("No DLL selected! Skipping...");
-                return value;
-            }
+            get => _statusText;
+            set { _statusText = value; RaisePropertyChanged(() => StatusText); }
         }
 
         public ObservableCollection<string> SteamLanguages
         {
             get => _steamLanguages;
-            set
-            {
-                _steamLanguages = value;
-                RaisePropertyChanged(() => SteamLanguages);
-            }
+            set { _steamLanguages = value; RaisePropertyChanged(() => SteamLanguages); }
         }
 
         public string SelectedLanguage
         {
             get => _selectedLanguage;
-            set
-            {
-                _selectedLanguage = value;
-                RaisePropertyChanged(() => SelectedLanguage);
-            }
+            set { _selectedLanguage = value; RaisePropertyChanged(() => SelectedLanguage); }
         }
 
         public ObservableCollection<string> Themes
         {
             get => _themes;
-            set
-            {
-                _themes = value;
-                RaisePropertyChanged(() => Themes);
-            }
+            set { _themes = value; RaisePropertyChanged(() => Themes); }
         }
 
         public string SelectedTheme
@@ -388,18 +375,28 @@ namespace GoldbergGUI.Core.ViewModels
             {
                 _selectedTheme = value;
                 RaisePropertyChanged(() => SelectedTheme);
-                if (value != null)
-                    _theme.ApplyTheme(value);
+                if (value != null) _theme.ApplyTheme(value);
             }
         }
 
-        public string StatusText
+        /// <summary>True when the steam_interfaces.txt has NOT yet been generated (button should be enabled).</summary>
+        public bool SteamInterfacesTxtExists
         {
-            get => _statusText;
-            set
+            get
             {
-                _statusText = value;
-                RaisePropertyChanged(() => StatusText);
+                var dllPathDirExists = GetDllPathDir(out var dirPath);
+                return dllPathDirExists && !File.Exists(Path.Combine(dirPath, "steam_interfaces.txt"));
+            }
+        }
+
+        /// <summary>True once the user has selected a real DLL path.</summary>
+        public bool DllSelected
+        {
+            get
+            {
+                var value = !DllPath.Contains(DllPathPlaceholder);
+                if (!value) _log.Warn("No DLL selected! Skipping...");
+                return value;
             }
         }
 
@@ -408,21 +405,38 @@ namespace GoldbergGUI.Core.ViewModels
 
         public static GlobalHelp G => new GlobalHelp();
 
-        // COMMANDS //
+        // -----------------------------------------------------------------------
+        // Commands
+        // -----------------------------------------------------------------------
 
-        public IMvxCommand OpenFileCommand => new MvxAsyncCommand(OpenFile);
+        public IMvxCommand OpenFileCommand           => new MvxAsyncCommand(OpenFile);
+        public IMvxCommand FindIdCommand             => new MvxAsyncCommand(FindId);
+        public IMvxCommand GetListOfAchievementsCommand => new MvxAsyncCommand(GetListOfAchievements);
+        public IMvxCommand GetListOfDlcCommand       => new MvxAsyncCommand(GetListOfDlc);
+        public IMvxCommand SelectAllDlcCommand       => new MvxCommand(() => SetAllDlcEnabled(true));
+        public IMvxCommand DeselectAllDlcCommand     => new MvxCommand(() => SetAllDlcEnabled(false));
+        public IMvxCommand SaveConfigCommand         => new MvxAsyncCommand(SaveConfig);
+        public IMvxCommand RevertCommand             => new MvxAsyncCommand(RevertConfig);
+        public IMvxCommand GenerateSteamInterfacesCommand => new MvxAsyncCommand(GenerateSteamInterfaces);
+        public IMvxCommand PasteDlcCommand           => new MvxCommand(PasteDlc);
+        public IMvxCommand OpenGlobalSettingsFolderCommand => new MvxCommand(OpenGlobalSettingsFolder);
+
+        // -----------------------------------------------------------------------
+        // Command implementations
+        // -----------------------------------------------------------------------
 
         private async Task OpenFile()
         {
             MainWindowEnabled = false;
             StatusText = "Please choose a file...";
+
             var dialog = new OpenFileDialog
             {
-                Filter = "SteamAPI DLL|steam_api.dll;steam_api64.dll|" +
-                         "All files (*.*)|*.*",
+                Filter = "SteamAPI DLL|steam_api.dll;steam_api64.dll|All files (*.*)|*.*",
                 Multiselect = false,
                 Title = "Select SteamAPI DLL..."
             };
+
             if (dialog.ShowDialog() != true)
             {
                 MainWindowEnabled = true;
@@ -438,23 +452,9 @@ namespace GoldbergGUI.Core.ViewModels
             StatusText = "Ready.";
         }
 
-        public IMvxCommand FindIdCommand => new MvxAsyncCommand(FindId);
-
         private async Task FindId()
         {
-            async Task FindIdInList(SteamApp[] steamApps)
-            {
-                var navigateTask = _navigationService
-                    .Navigate<SearchResultViewModel, IEnumerable<SteamApp>, SteamApp>(steamApps);
-                var navigateResult = await navigateTask.ConfigureAwait(false);
-                if (navigateResult != null)
-                {
-                    GameName = navigateResult.Name;
-                    AppId = navigateResult.AppId;
-                }
-            }
-
-            if (GameName.Contains("Game name..."))
+            if (GameName.Contains(GameNamePlaceholder))
             {
                 _log.Error("No game name entered!");
                 return;
@@ -462,6 +462,7 @@ namespace GoldbergGUI.Core.ViewModels
 
             MainWindowEnabled = false;
             StatusText = "Trying to find AppID...";
+
             var appByName = await _steam.GetAppByName(_gameName).ConfigureAwait(false);
             if (appByName != null)
             {
@@ -472,30 +473,35 @@ namespace GoldbergGUI.Core.ViewModels
             {
                 var list = await _steam.GetListOfAppsByName(GameName).ConfigureAwait(false);
                 var steamApps = list as SteamApp[] ?? list.ToArray();
-                if (steamApps.Length == 1)
+
+                // If exactly one result and it's valid, use it directly; otherwise show the picker
+                if (steamApps.Length == 1 && steamApps[0] != null)
                 {
-                    var steamApp = steamApps[0];
-                    if (steamApp != null)
-                    {
-                        GameName = steamApp.Name;
-                        AppId = steamApp.AppId;
-                    }
-                    else
-                    {
-                        await FindIdInList(steamApps).ConfigureAwait(false);
-                    }
+                    GameName = steamApps[0].Name;
+                    AppId = steamApps[0].AppId;
                 }
                 else
                 {
-                    await FindIdInList(steamApps).ConfigureAwait(false);
+                    await ShowSearchResultPicker(steamApps).ConfigureAwait(false);
                 }
             }
+
             await GetListOfDlc().ConfigureAwait(false);
             MainWindowEnabled = true;
             StatusText = "Ready.";
         }
 
-        //public IMvxCommand GetNameByIdCommand => new MvxAsyncCommand(GetNameById);
+        private async Task ShowSearchResultPicker(SteamApp[] steamApps)
+        {
+            var result = await _navigationService
+                .Navigate<SearchResultViewModel, IEnumerable<SteamApp>, SteamApp>(steamApps)
+                .ConfigureAwait(false);
+            if (result != null)
+            {
+                GameName = result.Name;
+                AppId = result.AppId;
+            }
+        }
 
         private async Task GetNameById()
         {
@@ -509,8 +515,6 @@ namespace GoldbergGUI.Core.ViewModels
             if (steamApp != null) GameName = steamApp.Name;
         }
 
-        public IMvxCommand GetListOfAchievementsCommand => new MvxAsyncCommand(GetListOfAchievements);
-
         private async Task GetListOfAchievements()
         {
             if (AppId <= 0)
@@ -521,40 +525,13 @@ namespace GoldbergGUI.Core.ViewModels
 
             MainWindowEnabled = false;
             StatusText = "Trying to get list of achievements...";
-            var listOfAchievements = await _steam.GetListOfAchievements(new SteamApp { AppId = AppId, Name = GameName });
-            Achievements = new MvxObservableCollection<Achievement>(listOfAchievements);
+            var list = await _steam.GetListOfAchievements(new SteamApp { AppId = AppId, Name = GameName });
+            Achievements = new MvxObservableCollection<Achievement>(list);
             MainWindowEnabled = true;
 
-            if (Achievements.Count > 0)
-            {
-                var empty = Achievements.Count == 1 ? "" : "s";
-                StatusText = $"Successfully got {Achievements.Count} achievement{empty}! Ready.";
-            }
-            else
-            {
-                StatusText = "No achievements found! Ready.";
-            }
-        }
-
-        public IMvxCommand GetListOfDlcCommand => new MvxAsyncCommand(GetListOfDlc);
-
-        public IMvxCommand SelectAllDlcCommand => new MvxCommand(() => SetAllDlcEnabled(true));
-        public IMvxCommand DeselectAllDlcCommand => new MvxCommand(() => SetAllDlcEnabled(false));
-
-        private void SetAllDlcEnabled(bool enabled)
-        {
-            if (DLCs == null) return;
-            // Temporarily unsubscribe to avoid UpdateAllDlcEnabledState firing on every item
-            foreach (var dlc in DLCs)
-                dlc.PropertyChanged -= OnDlcPropertyChanged;
-            foreach (var dlc in DLCs)
-                dlc.Enabled = enabled;
-            foreach (var dlc in DLCs)
-                dlc.PropertyChanged += OnDlcPropertyChanged;
-            _allDlcEnabled = enabled;
-            RaisePropertyChanged(() => AllDlcEnabled);
-            // Refresh the DataGrid so checkboxes redraw
-            DLCs = new ObservableCollection<DlcApp>(DLCs);
+            StatusText = Achievements.Count > 0
+                ? $"Successfully got {Achievements.Count} achievement{(Achievements.Count == 1 ? "" : "s")}! Ready."
+                : "No achievements found! Ready.";
         }
 
         private async Task GetListOfDlc()
@@ -567,37 +544,30 @@ namespace GoldbergGUI.Core.ViewModels
 
             MainWindowEnabled = false;
             StatusText = "Trying to get list of DLCs...";
-            var listOfDlc = await _steam.GetListOfDlc(new SteamApp { AppId = AppId, Name = GameName }, true)
+            var list = await _steam.GetListOfDlc(new SteamApp { AppId = AppId, Name = GameName }, true)
                 .ConfigureAwait(false);
-            DLCs = new MvxObservableCollection<DlcApp>(listOfDlc);
+            DLCs = new MvxObservableCollection<DlcApp>(list);
             MainWindowEnabled = true;
-            if (DLCs.Count > 0)
-            {
-                var empty = DLCs.Count == 1 ? "" : "s";
-                StatusText = $"Successfully got {DLCs.Count} DLC{empty}! Ready.";
-            }
-            else
-            {
-                StatusText = "No DLC found! Ready.";
-            }
-        }
 
-        public IMvxCommand SaveConfigCommand => new MvxAsyncCommand(SaveConfig);
+            StatusText = DLCs.Count > 0
+                ? $"Successfully got {DLCs.Count} DLC{(DLCs.Count == 1 ? "" : "s")}! Ready."
+                : "No DLC found! Ready.";
+        }
 
         private async Task SaveConfig()
         {
             _log.Info("Saving global settings...");
-            var globalConfiguration = new GoldbergGlobalConfiguration
+            await _goldberg.SetGlobalSettings(new GoldbergGlobalConfiguration
             {
                 AccountName = AccountName,
                 UserSteamId = SteamId,
                 Language = SelectedLanguage
-            };
-            await _goldberg.SetGlobalSettings(globalConfiguration).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+
             if (!DllSelected) return;
+            if (!GetDllPathDir(out var dirPath)) return;
 
             _log.Info("Saving Goldberg settings...");
-            if (!GetDllPathDir(out var dirPath)) return;
             MainWindowEnabled = false;
             StatusText = "Saving...";
             await _goldberg.Save(dirPath, new GoldbergConfiguration
@@ -608,14 +578,12 @@ namespace GoldbergGUI.Core.ViewModels
                 Offline = Offline,
                 DisableNetworking = DisableNetworking,
                 DisableOverlay = DisableOverlay
-            }
-            ).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
             MainWindowEnabled = true;
             StatusText = "Ready.";
         }
-
-        public IMvxCommand RevertCommand => new MvxAsyncCommand(RevertConfig);
 
         private async Task RevertConfig()
         {
@@ -628,8 +596,7 @@ namespace GoldbergGUI.Core.ViewModels
             if (!GetDllPathDir(out var dirPath)) return;
 
             var confirm = MessageBox.Show(
-                "This will remove all Goldberg files and restore the original Steam API DLL.\n\n" +
-                "Are you sure?",
+                "This will remove all Goldberg files and restore the original Steam API DLL.\n\nAre you sure?",
                 "Revert Changes",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
@@ -641,7 +608,6 @@ namespace GoldbergGUI.Core.ViewModels
             await _goldberg.Revert(dirPath).ConfigureAwait(false);
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
 
-            // Reset the form fields to reflect the clean state
             AppId = -1;
             Achievements = new ObservableCollection<Achievement>();
             DLCs = new ObservableCollection<DlcApp>();
@@ -653,8 +619,6 @@ namespace GoldbergGUI.Core.ViewModels
             StatusText = "Reverted successfully! Ready.";
         }
 
-        public IMvxCommand GenerateSteamInterfacesCommand => new MvxAsyncCommand(GenerateSteamInterfaces);
-
         private async Task GenerateSteamInterfaces()
         {
             if (!DllSelected) return;
@@ -662,56 +626,54 @@ namespace GoldbergGUI.Core.ViewModels
             _log.Info("Generate steam_interfaces.txt...");
             MainWindowEnabled = false;
             StatusText = @"Generating ""steam_interfaces.txt"".";
+
             GetDllPathDir(out var dirPath);
-            if (File.Exists(Path.Combine(dirPath, "steam_api_o.dll")))
-                await _goldberg.GenerateInterfacesFile(Path.Combine(dirPath, "steam_api_o.dll")).ConfigureAwait(false);
-            else if (File.Exists(Path.Combine(dirPath, "steam_api64_o.dll")))
-                await _goldberg.GenerateInterfacesFile(Path.Combine(dirPath, "steam_api64_o.dll"))
-                    .ConfigureAwait(false);
-            else await _goldberg.GenerateInterfacesFile(DllPath).ConfigureAwait(false);
+            var originalDll =
+                File.Exists(Path.Combine(dirPath, "steam_api_o.dll"))   ? Path.Combine(dirPath, "steam_api_o.dll") :
+                File.Exists(Path.Combine(dirPath, "steam_api64_o.dll")) ? Path.Combine(dirPath, "steam_api64_o.dll") :
+                DllPath;
+
+            await _goldberg.GenerateInterfacesFile(originalDll).ConfigureAwait(false);
             await RaisePropertyChanged(() => SteamInterfacesTxtExists).ConfigureAwait(false);
             MainWindowEnabled = true;
             StatusText = "Ready.";
         }
 
-        public IMvxCommand PasteDlcCommand => new MvxCommand(() =>
+        private void PasteDlc()
         {
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+
             _log.Info("Trying to paste DLC list...");
-            if (!(Clipboard.ContainsText(TextDataFormat.UnicodeText) || Clipboard.ContainsText(TextDataFormat.Text)))
+            if (!Clipboard.ContainsText(TextDataFormat.UnicodeText) && !Clipboard.ContainsText(TextDataFormat.Text))
             {
                 _log.Warn("Invalid DLC list!");
+                return;
+            }
+
+            var expression = new Regex(@"(?<id>.*) *= *(?<n>.*)");
+            var pastedDlc = Clipboard.GetText()
+                .Split(new[] { "\n", "\r\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => expression.Match(line))
+                .Where(m => m.Success)
+                .Select(m => new DlcApp
+                {
+                    AppId = Convert.ToInt32(m.Groups["id"].Value),
+                    Name  = m.Groups["n"].Value
+                })
+                .ToList();
+
+            if (pastedDlc.Count > 0)
+            {
+                DLCs = new ObservableCollection<DlcApp>(pastedDlc);
+                StatusText = pastedDlc.Count == 1
+                    ? "Successfully got one DLC from clipboard! Ready."
+                    : $"Successfully got {pastedDlc.Count} DLCs from clipboard! Ready.";
             }
             else
             {
-                var result = Clipboard.GetText();
-                var expression = new Regex(@"(?<id>.*) *= *(?<name>.*)");
-                var pastedDlc = (from line in result.Split(new[] { "\n", "\r\n" },
-                    StringSplitOptions.RemoveEmptyEntries)
-                                 select expression.Match(line) into match
-                                 where match.Success
-                                 select new DlcApp
-                                 {
-                                     AppId = Convert.ToInt32(match.Groups["id"].Value),
-                                     Name = match.Groups["name"].Value
-                                 }).ToList();
-                if (pastedDlc.Count > 0)
-                {
-                    DLCs.Clear();
-                    DLCs = new ObservableCollection<DlcApp>(pastedDlc);
-                    //var empty = DLCs.Count == 1 ? "" : "s";
-                    //StatusText = $"Successfully got {DLCs.Count} DLC{empty} from clipboard! Ready.";
-                    var statusTextCount = DLCs.Count == 1 ? "one DLC" : $"{DLCs.Count} DLCs";
-                    StatusText = $"Successfully got {statusTextCount} from clipboard! Ready.";
-                }
-                else
-                {
-                    StatusText = "No DLC found in clipboard! Ready.";
-                }
+                StatusText = "No DLC found in clipboard! Ready.";
             }
-        });
-
-        public IMvxCommand OpenGlobalSettingsFolderCommand => new MvxCommand(OpenGlobalSettingsFolder);
+        }
 
         private void OpenGlobalSettingsFolder()
         {
@@ -721,18 +683,20 @@ namespace GoldbergGUI.Core.ViewModels
                 return;
             }
 
-            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GSE Saves", "settings");
-            var start = Process.Start("explorer.exe", path);
-            start?.Dispose();
+            Process.Start("explorer.exe", path)?.Dispose();
         }
 
-        // OTHER METHODS //
+        // -----------------------------------------------------------------------
+        // Private helpers
+        // -----------------------------------------------------------------------
 
         private void ResetForm()
         {
-            DllPath = "Path to game's steam_api(64).dll...";
-            GameName = "Game name...";
+            DllPath = DllPathPlaceholder;
+            GameName = GameNamePlaceholder;
             AppId = -1;
             Achievements = new ObservableCollection<Achievement>();
             DLCs = new ObservableCollection<DlcApp>();
