@@ -1,6 +1,6 @@
 # gbe_forkGUI
 
-Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) modified to use Detanup01's [gbe_fork](https://github.com/Detanup01/gbe_fork).  **For the sake of transparency, the vast majority of this project was done using Claude AI. I'm not a programmer or computer scientist, just an average guy who likes GoldbergGUI and wanted to keep using it with a more modern Steam emulator. I do my best to thoroughly test each software release, but I'm sure the codebase and code structure is far from perfect.**
+Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) modified to use Detanup01's [gbe_fork](https://github.com/Detanup01/gbe_fork). <br/> **For the sake of transparency, the vast majority of this project was done using Claude AI. I'm not a programmer or computer scientist, just an average guy who likes GoldbergGUI and wanted to keep using it with a more modern Steam emulator. I do my best to thoroughly test each software release, but I'm sure the codebase and code structure is far from perfect.**
 
 ## Installation
 
