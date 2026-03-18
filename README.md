@@ -27,9 +27,9 @@ Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI)
 
 ## Acknowledgment
 
-[GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) is owned by [Jeddunk](https://forgejo.jeddunk.xyz/jeddunk) and licensed under the GNU Lesser General Public License v3.0.
-[Goldberg Emulator](https://gitlab.com/Mr_Goldberg/goldberg_emulator/-/tree/master) is owned by [Mr. Goldberg](https://gitlab.com/Mr_Goldberg) and licensed under GNU Lesser General Public License v3.0.
-[gbe_fork](https://github.com/Detanup01/gbe_fork) is owned by [Detanup01](https://github.com/Detanup01) and licensed under GNU Lesser General Public License v3.0.
+[GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI) is owned by [Jeddunk](https://forgejo.jeddunk.xyz/jeddunk) and licensed under the GNU Lesser General Public License v3.0. <br/>
+[Goldberg Emulator](https://gitlab.com/Mr_Goldberg/goldberg_emulator/-/tree/master) is owned by [Mr. Goldberg](https://gitlab.com/Mr_Goldberg) and licensed under GNU Lesser General Public License v3.0. <br/>
+[gbe_fork](https://github.com/Detanup01/gbe_fork) is owned by [Detanup01](https://github.com/Detanup01) and licensed under GNU Lesser General Public License v3.0. <br/>
 [UrbanCMC](https://github.com/UrbanCMC/) - Implementation of achievements in GoldbergGUI
 
 ## License
