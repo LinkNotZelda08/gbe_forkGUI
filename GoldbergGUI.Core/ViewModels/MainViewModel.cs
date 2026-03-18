@@ -44,18 +44,23 @@ namespace GoldbergGUI.Core.ViewModels
 
         private readonly ISteamService _steam;
         private readonly IGoldbergService _goldberg;
+        private readonly IThemeService _theme;
         private readonly IMvxLog _log;
         private bool _mainWindowEnabled;
         private bool _goldbergApplied;
         private ObservableCollection<string> _steamLanguages;
         private string _selectedLanguage;
+        private ObservableCollection<string> _themes;
+        private string _selectedTheme;
         private readonly IMvxLogProvider _logProvider;
 
-        public MainViewModel(ISteamService steam, IGoldbergService goldberg, IMvxLogProvider logProvider,
-            IMvxNavigationService navigationService) : base(logProvider, navigationService)
+        public MainViewModel(ISteamService steam, IGoldbergService goldberg, IThemeService theme,
+            IMvxLogProvider logProvider, IMvxNavigationService navigationService)
+            : base(logProvider, navigationService)
         {
             _steam = steam;
             _goldberg = goldberg;
+            _theme = theme;
             _logProvider = logProvider;
             _log = logProvider.GetLogFor<MainViewModel>();
             _navigationService = navigationService;
@@ -72,6 +77,11 @@ namespace GoldbergGUI.Core.ViewModels
                 try
                 {
                     SteamLanguages = new ObservableCollection<string>(_goldberg.Languages());
+                    Themes = new ObservableCollection<string>(_theme.Themes);
+                    var savedTheme = _theme.LoadSavedTheme();
+                    _theme.ApplyTheme(savedTheme);
+                    _selectedTheme = savedTheme;
+                    RaisePropertyChanged(() => SelectedTheme);
                     ResetForm();
                     await _steam.Initialize(_logProvider.GetLogFor<SteamService>()).ConfigureAwait(false);
                     var globalConfiguration =
@@ -358,7 +368,28 @@ namespace GoldbergGUI.Core.ViewModels
             {
                 _selectedLanguage = value;
                 RaisePropertyChanged(() => SelectedLanguage);
-                //MyLogger.Log.Debug($"Lang: {value}");
+            }
+        }
+
+        public ObservableCollection<string> Themes
+        {
+            get => _themes;
+            set
+            {
+                _themes = value;
+                RaisePropertyChanged(() => Themes);
+            }
+        }
+
+        public string SelectedTheme
+        {
+            get => _selectedTheme;
+            set
+            {
+                _selectedTheme = value;
+                RaisePropertyChanged(() => SelectedTheme);
+                if (value != null)
+                    _theme.ApplyTheme(value);
             }
         }
 

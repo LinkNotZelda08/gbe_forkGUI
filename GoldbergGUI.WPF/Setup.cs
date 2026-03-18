@@ -1,3 +1,5 @@
+using GoldbergGUI.Core.Services;
+using MvvmCross;
 using MvvmCross.Logging;
 using MvvmCross.Platforms.Wpf.Core;
 using Serilog;
@@ -20,5 +22,10 @@ namespace GoldbergGUI.WPF
             return base.CreateLogProvider();
         }
 
+        protected override void InitializeFirstChance()
+        {
+            base.InitializeFirstChance();
+            Mvx.IoCProvider.RegisterSingleton<IThemeService>(new ThemeService());
+        }
     }
 }
