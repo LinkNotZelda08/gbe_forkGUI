@@ -15,6 +15,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <Grid IsEnabled="{Binding MainWindowEnabled}" Margin="5,5,5,5">
             <Grid.RowDefinitions>
@@ -33,17 +34,15 @@
                     <Grid Margin="10,20,10,10">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto" MaxHeight="0"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition/>
                         </Grid.RowDefinitions>
                         <TextBox Text="{Binding DllPath, Mode=OneWay}" TextWrapping="Wrap" Margin="0,0,85,5" VerticalAlignment="Center" Padding="1,0,0,0" Height="20" IsEnabled="False"/>
                         <Button Content="Select... (_O)" Command="{Binding OpenFileCommand}" HorizontalAlignment="Right" Width="80" Grid.Row="0" Margin="0,0,0,5"/>
-                        <Button Content="_Generate steam__interfaces.txt" IsEnabled="{Binding SteamInterfacesTxtExists, UpdateSourceTrigger=PropertyChanged}" Command="{Binding GenerateSteamInterfacesCommand}" Grid.Row="1" Margin="0,5,0,5" />
-                        <TextBox Text="{Binding GameName, Mode=TwoWay}" TextWrapping="Wrap" VerticalAlignment="Center" Padding="1,0,0,0" Grid.Row="2" Margin="0,5,215,5" Height="20"/>
-                        <Button Content="_Find ID..." Command="{Binding FindIdCommand}" Width="80" Grid.Row="2" Margin="0,5,130,5" HorizontalAlignment="Right"/>
-                        <TextBox Text="{Binding AppId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" HorizontalAlignment="Right" VerticalAlignment="Center" Padding="1,0,0,0" Grid.Row="2" Width="125" Margin="0,5,0,5"/>
-                        <TabControl Grid.Row="3" Margin="0,5,0,0" Padding="0,0,0,0">
+                        <TextBox Text="{Binding GameName, Mode=TwoWay}" TextWrapping="Wrap" VerticalAlignment="Center" Padding="1,0,0,0" Grid.Row="1" Margin="0,5,215,5" Height="20"/>
+                        <Button Content="_Find ID..." Command="{Binding FindIdCommand}" Width="80" Grid.Row="1" Margin="0,5,130,5" HorizontalAlignment="Right"/>
+                        <TextBox Text="{Binding AppId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" HorizontalAlignment="Right" VerticalAlignment="Center" Padding="1,0,0,0" Grid.Row="1" Width="125" Margin="0,5,0,5"/>
+                        <TabControl Grid.Row="2" Margin="0,5,0,0" Padding="0,0,0,0">
                             <TabItem Header="DLC">
                                 <TabItem.InputBindings>
                                     <KeyBinding Key="V" Modifiers="Control" Command="{Binding PasteDlcCommand}"/>
@@ -182,6 +181,7 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
@@ -204,16 +204,22 @@
                             <CheckBox Content="Global" Grid.Row="3" Grid.Column="2" HorizontalAlignment="Right"
                                       Margin="10,0,5,0" VerticalAlignment="Center" IsChecked="True"
                                       IsEnabled="False"/>
+                            <Label Content="Steamclient Mode" HorizontalAlignment="Left" Grid.Row="4"
+                                Grid.Column="0" Margin="0,0,10,0" />
+                            <CheckBox Grid.Row="4" Grid.Column="1" VerticalAlignment="Center"
+                                      IsChecked="{Binding UseSteamclientMode, Mode=TwoWay}"
+                                      ToolTip="When enabled, Save will use ColdClientLoader instead of replacing steam_api.dll. Launch via ColdClientLoader.exe."/>
                             <Label Content="Custom Broadcast Addresses:" HorizontalAlignment="Left"
-                                    Grid.ColumnSpan="2" Grid.Row="4" Grid.Column="0" Margin="0,0,10,0"/>
-                            <CheckBox Content="Global" Grid.Row="4" Grid.Column="2" HorizontalAlignment="Right"
+                                    Grid.ColumnSpan="2" Grid.Row="5" Grid.Column="0" Margin="0,0,10,0"/>
+                            <CheckBox Content="Global" Grid.Row="5" Grid.Column="2" HorizontalAlignment="Right"
                                       Margin="10,0,5,0" VerticalAlignment="Center" IsChecked="True"
                                       IsEnabled="False"/>
-                            <TextBox Grid.Row="5" Grid.ColumnSpan="3" Grid.Column="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                            <TextBox Grid.Row="6" Grid.ColumnSpan="3" Grid.Column="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                      Text="{Binding CustomBroadcastIps, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                       TextWrapping="Wrap"
                                       AcceptsReturn="True"
                                       VerticalScrollBarVisibility="Auto" MaxHeight="120" MinHeight="120"/>
-                            <TextBlock TextWrapping="Wrap" Grid.ColumnSpan="3" Grid.Column="0" Grid.Row="6" Margin="5,10,5,5">
+                            <TextBlock TextWrapping="Wrap" Grid.ColumnSpan="3" Grid.Column="0" Grid.Row="7" Margin="5,10,5,5">
                                 <Run Text="{Binding G.Header, Mode=OneTime}" FontWeight="Bold"/><!--
                                 --><Run Text="{Binding G.TextPreLink, Mode=OneTime}"/>
                                 <Hyperlink Command="{Binding OpenGlobalSettingsFolderCommand}"><Run 
@@ -245,20 +251,23 @@
                     </StackPanel>
                 </TabItem>
             </TabControl>
-            <!-- Bottom Row -->
-            <Grid Grid.Row="1" Margin="5,5,5,5">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <CheckBox Content="gbe__fork applied" IsChecked="{Binding GoldbergApplied}" IsEnabled="False" Height="20" />
-                <Button Content="_Save" Command="{Binding SaveConfigCommand}" Width="90" Grid.Column="1" Margin="0,0,5,0" Padding="8,4"/>
-                <Button Content="_Revert" Command="{Binding RevertCommand}" Width="90" Grid.Column="2" Padding="8,4"/>
-            </Grid>
+        </Grid>
+        <!-- Bottom Row -->
+        <Grid Grid.Row="1" Margin="5,5,5,5">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal">
+                <CheckBox Content="gbe_fork applied" IsChecked="{Binding GoldbergApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                <CheckBox Content="Steamclient mode" IsChecked="{Binding SteamclientModeApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center"/>
+            </StackPanel>
+            <Button Content="_Save" Command="{Binding SaveConfigCommand}" Width="90" Grid.Column="1" Margin="0,0,5,0" Padding="8,4"/>
+            <Button Content="_Revert" Command="{Binding RevertCommand}" Width="90" Grid.Column="2" Padding="8,4"/>
         </Grid>
         <!-- Status Bar -->
-        <StatusBar Grid.Column="0" Grid.Row="1" Padding="2,2,2,2" BorderBrush="#33000000" BorderThickness="0,2,0,0">
+        <StatusBar Grid.Row="2" Padding="2,2,2,2" BorderBrush="#33000000" BorderThickness="0,2,0,0">
             <StatusBarItem Content="{Binding StatusText}"/>
         </StatusBar>
     </Grid>

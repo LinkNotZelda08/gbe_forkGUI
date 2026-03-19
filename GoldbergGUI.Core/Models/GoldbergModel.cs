@@ -24,6 +24,11 @@ namespace GoldbergGUI.Core.Models
         /// Custom broadcast addresses (IPv4 or domain addresses)
         /// </summary>
         public List<string> CustomBroadcastIps { get; set; }
+        /// <summary>
+        /// Whether to use steamclient mode (loader) instead of replacing steam_api.dll directly.
+        /// Persisted globally so the preference is remembered across games and app restarts.
+        /// </summary>
+        public bool UseSteamclientMode { get; set; }
     }
     public class GoldbergConfiguration
     {

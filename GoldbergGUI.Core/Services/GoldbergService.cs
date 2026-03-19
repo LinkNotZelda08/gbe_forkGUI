@@ -22,11 +22,17 @@ namespace GoldbergGUI.Core.Services
         Task<GoldbergGlobalConfiguration> Initialize(IMvxLog log);
         Task<GoldbergConfiguration> Read(string path);
         Task Save(string path, GoldbergConfiguration configuration);
+        Task SaveConfigOnly(string path, GoldbergConfiguration configuration);
         Task<GoldbergGlobalConfiguration> GetGlobalSettings();
         Task SetGlobalSettings(GoldbergGlobalConfiguration configuration);
         bool GoldbergApplied(string path);
         Task<bool> Revert(string path);
+        Task RevertDllOnly(string path);
         Task GenerateInterfacesFile(string filePath);
+        Task SetupSteamclientMode(string path, string exeName, int appId);
+        Task RevertSteamclientMode(string path);
+        bool SteamclientModeApplied(string path);
+        string GetSteamclientExeName(string path);
         List<string> Languages();
     }
 
@@ -57,6 +63,18 @@ namespace GoldbergGUI.Core.Services
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "GSE Saves", "settings", "configs.user.ini");
+
+        private static readonly HttpClient _httpClient;
+
+        static GoldbergService()
+        {
+            _httpClient = new HttpClient();
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "GoldbergGUI");
+        }
+
+        // Compiled once and reused for every Read() call
+        private static readonly Regex DlcKvRegex   = new Regex(@"(?<id>.*) *= *(?<n>.*)");
+        private static readonly Regex AppPathRegex  = new Regex(@"(?<id>.*) *= *(?<appPath>.*)");
 
         // ReSharper disable StringLiteralTypo
         private readonly List<string> _interfaceNames = new List<string>
@@ -108,6 +126,7 @@ namespace GoldbergGUI.Core.Services
             var steamId          = DefaultSteamId;
             var language         = DefaultLanguage;
             var customBroadcastIps = new List<string>();
+            var useSteamclientMode = false;
 
             if (File.Exists(_globalUserIniPath))
             {
@@ -126,6 +145,9 @@ namespace GoldbergGUI.Core.Services
 
                         if (general.TryGetValue("language", out var lang) && !string.IsNullOrWhiteSpace(lang))
                             language = lang.Trim();
+
+                        if (general.TryGetValue("use_steamclient_mode", out var scMode))
+                            bool.TryParse(scMode.Trim(), out useSteamclientMode);
                     }
 
                     if (ini.TryGetValue("user::saves", out var saves) &&
@@ -141,10 +163,11 @@ namespace GoldbergGUI.Core.Services
             _log.Info("Got global settings.");
             return new GoldbergGlobalConfiguration
             {
-                AccountName       = accountName,
-                UserSteamId       = steamId,
-                Language          = language,
-                CustomBroadcastIps = customBroadcastIps
+                AccountName        = accountName,
+                UserSteamId        = steamId,
+                Language           = language,
+                CustomBroadcastIps = customBroadcastIps,
+                UseSteamclientMode = useSteamclientMode
             };
         }
 
@@ -165,6 +188,7 @@ namespace GoldbergGUI.Core.Services
             sb.AppendLine($"account_name={accountName}");
             sb.AppendLine($"account_steamid={userSteamId}");
             sb.AppendLine($"language={language}");
+            sb.AppendLine($"use_steamclient_mode={c.UseSteamclientMode.ToString().ToLower()}");
             sb.AppendLine();
 
             if (c.CustomBroadcastIps?.Count > 0)
@@ -267,11 +291,10 @@ namespace GoldbergGUI.Core.Services
             else if (File.Exists(dlcTxtLegacy))
             {
                 _log.Info("Getting DLCs from legacy DLC.txt...");
-                var kvRegex  = new Regex(@"(?<id>.*) *= *(?<n>.*)");
                 var lines    = await File.ReadAllLinesAsync(dlcTxtLegacy).ConfigureAwait(false);
                 foreach (var line in lines)
                 {
-                    var m = kvRegex.Match(line);
+                    var m = DlcKvRegex.Match(line);
                     if (m.Success)
                         dlcList.Add(new DlcApp
                         {
@@ -283,11 +306,10 @@ namespace GoldbergGUI.Core.Services
 
                 if (File.Exists(appPathTxt))
                 {
-                    var pathRegex    = new Regex(@"(?<id>.*) *= *(?<appPath>.*)");
                     var appPathLines = await File.ReadAllLinesAsync(appPathTxt).ConfigureAwait(false);
                     foreach (var line in appPathLines)
                     {
-                        var m = pathRegex.Match(line);
+                        var m = AppPathRegex.Match(line);
                         if (!m.Success) continue;
                         var i = dlcList.FindIndex(x => x.AppId == Convert.ToInt32(m.Groups["id"].Value));
                         if (i >= 0) dlcList[i].AppPath = m.Groups["appPath"].Value;
@@ -354,6 +376,58 @@ namespace GoldbergGUI.Core.Services
             var settingsDir = Path.Combine(path, "steam_settings");
             EnsureDirectory(settingsDir);
 
+            await WriteSettingsFiles(path, settingsDir, c).ConfigureAwait(false);
+
+            // Clean up if no achievements
+            if (c.Achievements.Count == 0)
+            {
+                _log.Info("No achievements set! Removing achievement files...");
+                var imagePath       = Path.Combine(settingsDir, "images");
+                var achievementPath = Path.Combine(settingsDir, "achievements.json");
+                if (Directory.Exists(imagePath))  Directory.Delete(imagePath, true);
+                if (File.Exists(achievementPath)) File.Delete(achievementPath);
+            }
+
+            // Clean up if no DLC
+            if (c.DlcList.Count == 0)
+            {
+                _log.Info("No DLC set! Removing configs.app.ini...");
+                DeleteIfExists(Path.Combine(settingsDir, "configs.app.ini"));
+                DeleteIfExists(Path.Combine(settingsDir, "DLC.txt"));
+                DeleteIfExists(Path.Combine(settingsDir, "app_paths.txt"));
+            }
+
+            // Remove legacy flag .txt files from original Goldberg
+            foreach (var flag in new[] { "offline.txt", "disable_networking.txt", "disable_overlay.txt" })
+                DeleteIfExists(Path.Combine(settingsDir, flag));
+
+            _log.Info("Save complete.");
+        }
+
+        // -----------------------------------------------------------------------
+        // SaveConfigOnly — writes config files without touching any DLLs
+        // Used by steamclient mode where the original steam_api.dll stays untouched
+        // -----------------------------------------------------------------------
+        public async Task SaveConfigOnly(string path, GoldbergConfiguration c)
+        {
+            _log.Info("SaveConfigOnly...");
+            var settingsDir = Path.Combine(path, "steam_settings");
+            EnsureDirectory(settingsDir);
+
+            await WriteSettingsFiles(path, settingsDir, c).ConfigureAwait(false);
+
+            // Clean up if no DLC
+            if (c.DlcList.Count == 0)
+                DeleteIfExists(Path.Combine(settingsDir, "configs.app.ini"));
+
+            _log.Info("SaveConfigOnly complete.");
+        }
+
+        // -----------------------------------------------------------------------
+        // WriteSettingsFiles — shared config-writing logic used by Save and SaveConfigOnly
+        // -----------------------------------------------------------------------
+        private async Task WriteSettingsFiles(string path, string settingsDir, GoldbergConfiguration c)
+        {
             // steam_appid.txt: write in steam_settings/ (gbe_fork) AND beside the DLL (compat)
             var appIdText = c.AppId.ToString();
             await File.WriteAllTextAsync(Path.Combine(settingsDir, "steam_appid.txt"), appIdText).ConfigureAwait(false);
@@ -367,8 +441,8 @@ namespace GoldbergGUI.Core.Services
                 EnsureDirectory(imagePath);
                 foreach (var ach in c.Achievements)
                 {
-                    await DownloadImageAsync(imagePath, ach.Icon);
-                    await DownloadImageAsync(imagePath, ach.IconGray);
+                    await DownloadImageAsync(imagePath, ach.Icon).ConfigureAwait(false);
+                    await DownloadImageAsync(imagePath, ach.IconGray).ConfigureAwait(false);
                     ach.Icon     = $"images/{Path.GetFileName(ach.Icon)}";
                     ach.IconGray = $"images/{Path.GetFileName(ach.IconGray)}";
                 }
@@ -389,7 +463,6 @@ namespace GoldbergGUI.Core.Services
                 {
                     var userSavesDir = Path.Combine(GlobalSettingsPath, c.AppId.ToString());
                     EnsureDirectory(userSavesDir);
-                    var userAchievementsPath = Path.Combine(userSavesDir, "achievements.json");
                     var sb = new StringBuilder();
                     sb.AppendLine("{");
                     for (int i = 0; i < c.Achievements.Count; i++)
@@ -402,21 +475,13 @@ namespace GoldbergGUI.Core.Services
                         sb.AppendLine($"  }}{comma}");
                     }
                     sb.AppendLine("}");
-                    await File.WriteAllTextAsync(userAchievementsPath, sb.ToString()).ConfigureAwait(false);
+                    await File.WriteAllTextAsync(Path.Combine(userSavesDir, "achievements.json"), sb.ToString())
+                        .ConfigureAwait(false);
                     _log.Info("Saved unlock state to GSE Saves.");
                 }
             }
-            else
-            {
-                _log.Info("No achievements set! Removing achievement files...");
-                var imagePath       = Path.Combine(settingsDir, "images");
-                var achievementPath = Path.Combine(settingsDir, "achievements.json");
-                if (Directory.Exists(imagePath))    Directory.Delete(imagePath, true);
-                if (File.Exists(achievementPath))   File.Delete(achievementPath);
-            }
 
             // configs.app.ini — DLC lists
-            var configsAppPath = Path.Combine(settingsDir, "configs.app.ini");
             if (c.DlcList.Count > 0)
             {
                 _log.Info("Saving DLC settings to configs.app.ini...");
@@ -444,14 +509,8 @@ namespace GoldbergGUI.Core.Services
                     sb.AppendLine();
                 }
 
-                await File.WriteAllTextAsync(configsAppPath, sb.ToString()).ConfigureAwait(false);
-            }
-            else
-            {
-                _log.Info("No DLC set! Removing configs.app.ini...");
-                DeleteIfExists(configsAppPath);
-                DeleteIfExists(Path.Combine(settingsDir, "DLC.txt"));
-                DeleteIfExists(Path.Combine(settingsDir, "app_paths.txt"));
+                await File.WriteAllTextAsync(Path.Combine(settingsDir, "configs.app.ini"), sb.ToString())
+                    .ConfigureAwait(false);
             }
 
             // configs.main.ini — connectivity flags (preserve unmanaged sections)
@@ -468,17 +527,36 @@ namespace GoldbergGUI.Core.Services
             mainIni["main::connectivity"]["disable_overlay"]    = c.DisableOverlay    ? "1" : "0";
 
             await File.WriteAllTextAsync(configsMainPath, SerializeIni(mainIni)).ConfigureAwait(false);
-
-            // Remove legacy flag .txt files from original Goldberg
-            foreach (var flag in new[] { "offline.txt", "disable_networking.txt", "disable_overlay.txt" })
-                DeleteIfExists(Path.Combine(settingsDir, flag));
-
-            _log.Info("Save complete.");
         }
 
         // -----------------------------------------------------------------------
-        // GoldbergApplied — quick check
+        // RevertDllOnly — restores original steam_api DLLs without touching config
         // -----------------------------------------------------------------------
+        public async Task RevertDllOnly(string path)
+        {
+            _log.Info($"RevertDllOnly in {path}...");
+            await Task.Run(() =>
+            {
+                foreach (var name in new[] { "steam_api", "steam_api64" })
+                {
+                    var currentDll  = Path.Combine(path, $"{name}.dll");
+                    var originalDll = Path.Combine(path, $"{name}_o.dll");
+                    var guiBackup   = Path.Combine(path, $".{name}.dll.GOLDBERGGUIBACKUP");
+
+                    if (File.Exists(originalDll))
+                    {
+                        if (File.Exists(currentDll)) File.Delete(currentDll);
+                        File.Move(originalDll, currentDll);
+                        _log.Info($"Restored {name}.dll.");
+                    }
+                    if (File.Exists(guiBackup))
+                    {
+                        File.SetAttributes(guiBackup, FileAttributes.Normal);
+                        File.Delete(guiBackup);
+                    }
+                }
+            }).ConfigureAwait(false);
+        }
         public bool GoldbergApplied(string path)
         {
             var settingsDirExists = Directory.Exists(Path.Combine(path, "steam_settings"));
@@ -549,6 +627,50 @@ namespace GoldbergGUI.Core.Services
                         File.Delete(userAchievementsPath);
                     }
                 }
+
+                // Remove steamclient mode files if present.
+                // The loader files may have been placed in a separate gameDir (where the
+                // game exe lives), recorded in ColdClientLoader.ini — clean both locations.
+                var steamclientFiles = new[]
+                {
+                    "steamclient_loader_x32.exe", "steamclient_loader_x64.exe", "ColdClientLoader.exe",
+                    "steamclient_loader.exe", "steamclient_loader64.exe",
+                    "steamclient.dll", "steamclient64.dll",
+                    "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll",
+                    "ColdClientLoader.ini"
+                };
+
+                // Find any alternate gameDir recorded in the ini before deleting it
+                var iniInPath = Path.Combine(path, "ColdClientLoader.ini");
+                string gameDir = null;
+                if (File.Exists(iniInPath))
+                {
+                    // Exe= line tells us the game exe name; the ini itself lives in gameDir
+                    gameDir = Path.GetDirectoryName(iniInPath);
+                }
+                else
+                {
+                    // Search one level up in case ini was written to the exe dir above the dll dir
+                    var parent = Directory.GetParent(path)?.FullName;
+                    if (parent != null && File.Exists(Path.Combine(parent, "ColdClientLoader.ini")))
+                        gameDir = parent;
+                }
+
+                foreach (var file in steamclientFiles)
+                    DeleteIfExists(Path.Combine(path, file));
+
+                // Remove extra_dlls folder from both locations
+                var extraDllsInPath = Path.Combine(path, "extra_dlls");
+                if (Directory.Exists(extraDllsInPath)) Directory.Delete(extraDllsInPath, true);
+
+                if (gameDir != null && !string.Equals(gameDir, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    _log.Info($"Also cleaning steamclient files from gameDir: {gameDir}");
+                    foreach (var file in steamclientFiles)
+                        DeleteIfExists(Path.Combine(gameDir, file));
+                    var extraDllsInGameDir = Path.Combine(gameDir, "extra_dlls");
+                    if (Directory.Exists(extraDllsInGameDir)) Directory.Delete(extraDllsInGameDir, true);
+                }
             }).ConfigureAwait(false);
 
             _log.Info("Revert complete.");
@@ -556,8 +678,109 @@ namespace GoldbergGUI.Core.Services
         }
 
         // -----------------------------------------------------------------------
-        // Generate steam_interfaces.txt
+        // Steamclient mode — leaves steam_api.dll untouched, injects via loader
         // -----------------------------------------------------------------------
+        public async Task SetupSteamclientMode(string path, string exeName, int appId)
+        {
+            _log.Info($"Setting up steamclient mode in {path}...");
+            var experimentalDir = Path.Combine(_goldbergPath, "release", "steamclient_experimental");
+            if (!Directory.Exists(experimentalDir))
+            {
+                MessageBox.Show(
+                    "Could not find the steamclient_experimental folder.\n\n" +
+                    "Please delete the goldberg folder and restart the app to re-download gbe_fork.",
+                    "Missing Files", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            await Task.Run(() =>
+            {
+                foreach (var loader in new[] { "steamclient_loader_x32.exe", "steamclient_loader_x64.exe", "ColdClientLoader.exe",
+                                               "steamclient_loader.exe", "steamclient_loader64.exe" })
+                {
+                    var src = Path.Combine(experimentalDir, loader);
+                    if (File.Exists(src)) File.Copy(src, Path.Combine(path, loader), true);
+                }
+                foreach (var dll in new[] { "steamclient.dll", "steamclient64.dll",
+                                            "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll" })
+                {
+                    var src = Path.Combine(experimentalDir, dll);
+                    if (File.Exists(src)) File.Copy(src, Path.Combine(path, dll), true);
+                }
+
+                // Copy extra_dlls folder (contains DRM-patching dlls e.g. steamclient_extra_x64.dll)
+                var srcExtraDlls = Path.Combine(experimentalDir, "extra_dlls");
+                var dstExtraDlls = Path.Combine(path, "extra_dlls");
+                if (Directory.Exists(srcExtraDlls))
+                {
+                    Directory.CreateDirectory(dstExtraDlls);
+                    foreach (var srcFile in Directory.GetFiles(srcExtraDlls, "*", SearchOption.AllDirectories))
+                    {
+                        var relative = Path.GetRelativePath(srcExtraDlls, srcFile);
+                        var dstFile  = Path.Combine(dstExtraDlls, relative);
+                        Directory.CreateDirectory(Path.GetDirectoryName(dstFile)!);
+                        File.Copy(srcFile, dstFile, true);
+                    }
+                }
+
+                // Pick the best available launcher: prefer x64, fall back to x32, then legacy names
+                var launcherName = new[] { "steamclient_loader_x64.exe", "steamclient_loader_x32.exe",
+                                           "steamclient_loader64.exe", "steamclient_loader.exe", "ColdClientLoader.exe" }
+                    .FirstOrDefault(l => File.Exists(Path.Combine(path, l))) ?? "steamclient_loader_x64.exe";
+
+                var ini = new StringBuilder();
+                ini.AppendLine("[SteamClient]");
+                ini.AppendLine($"Exe={exeName}");
+                ini.AppendLine("ExeRunDir=.");
+                ini.AppendLine($"AppId={appId}");
+                ini.AppendLine("SteamClientDll=steamclient.dll");
+                ini.AppendLine("SteamClient64Dll=steamclient64.dll");
+                if (Directory.Exists(dstExtraDlls))
+                    ini.AppendLine("DllsToInjectFolder=extra_dlls");
+                ini.AppendLine();
+                ini.AppendLine("[Injection]");
+                ini.AppendLine("ForceInjectSteamClient=1");
+                ini.AppendLine("ForceInjectGameOverlayRenderer=1");
+                ini.AppendLine("IgnoreLoaderArchDifference=0");
+                File.WriteAllText(Path.Combine(path, "ColdClientLoader.ini"), ini.ToString());
+            }).ConfigureAwait(false);
+
+            _log.Info("Steamclient mode setup complete.");
+        }
+
+        public async Task RevertSteamclientMode(string path)
+        {
+            _log.Info($"Reverting steamclient mode in {path}...");
+            await Task.Run(() =>
+            {
+                foreach (var file in new[]
+                {
+                    "steamclient_loader_x32.exe", "steamclient_loader_x64.exe", "ColdClientLoader.exe",
+                    "steamclient_loader.exe", "steamclient_loader64.exe",
+                    "steamclient.dll", "steamclient64.dll",
+                    "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll",
+                    "ColdClientLoader.ini"
+                })
+                    DeleteIfExists(Path.Combine(path, file));
+
+                // Remove extra_dlls folder
+                var extraDlls = Path.Combine(path, "extra_dlls");
+                if (Directory.Exists(extraDlls)) Directory.Delete(extraDlls, true);
+            }).ConfigureAwait(false);
+            _log.Info("Steamclient mode reverted.");
+        }
+
+        public bool SteamclientModeApplied(string path) =>
+            File.Exists(Path.Combine(path, "ColdClientLoader.ini"));
+
+        public string GetSteamclientExeName(string path)
+        {
+            var iniPath = Path.Combine(path, "ColdClientLoader.ini");
+            if (!File.Exists(iniPath)) return string.Empty;
+            var ini = ReadIniFile(iniPath);
+            return ini.TryGetValue("SteamClient", out var section) &&
+                   section.TryGetValue("Exe", out var exe) ? exe : string.Empty;
+        }
         public async Task GenerateInterfacesFile(string filePath)
         {
             _log.Debug($"GenerateInterfacesFile {filePath}");
@@ -631,15 +854,12 @@ namespace GoldbergGUI.Core.Services
             _log.Info("Checking for gbe_fork updates...");
             EnsureDirectory(_goldbergPath);
 
-            var client = new HttpClient();
-            client.DefaultRequestHeaders.Add("User-Agent", "GoldbergGUI");
-
             string downloadUrl = null;
             string remoteTag   = null;
 
             try
             {
-                var json = await client.GetStringAsync(GbeReleaseApiUrl).ConfigureAwait(false);
+                var json = await _httpClient.GetStringAsync(GbeReleaseApiUrl).ConfigureAwait(false);
                 var doc  = System.Text.Json.JsonDocument.Parse(json);
 
                 if (doc.RootElement.TryGetProperty("tag_name", out var tag))
@@ -707,10 +927,8 @@ namespace GoldbergGUI.Core.Services
         {
             try
             {
-                var client = new HttpClient();
-                client.DefaultRequestHeaders.Add("User-Agent", "GoldbergGUI");
                 _log.Debug($"Downloading from: {downloadUrl}");
-                var data = await client.GetByteArrayAsync(downloadUrl).ConfigureAwait(false);
+                var data = await _httpClient.GetByteArrayAsync(downloadUrl).ConfigureAwait(false);
                 await File.WriteAllBytesAsync(_goldbergZipPath, data).ConfigureAwait(false);
                 _log.Info("Download finished!");
             }
@@ -786,8 +1004,7 @@ namespace GoldbergGUI.Core.Services
                 _log.Warn($"Previously downloaded image '{imageUrl}' is now missing!");
                 return;
             }
-            var client    = new HttpClient();
-            var imageData = await client.GetByteArrayAsync(new Uri(imageUrl, UriKind.Absolute));
+            var imageData = await _httpClient.GetByteArrayAsync(new Uri(imageUrl, UriKind.Absolute));
             await File.WriteAllBytesAsync(targetPath, imageData);
         }
 

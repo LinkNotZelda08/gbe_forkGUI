@@ -51,6 +51,11 @@ namespace GoldbergGUI.Core.ViewModels
         private string _statusText;
         private bool _mainWindowEnabled;
         private bool _goldbergApplied;
+        private bool _steamclientModeApplied;
+        private bool _useSteamclientMode;
+        private List<string> _customBroadcastIps = new List<string>();
+        private string _steamclientGameDir; // folder where loader/ini were written (may differ from DLL dir)
+        private bool _globalSteamclientPreference; // persisted preference, never overwritten by game switches
         private ObservableCollection<string> _steamLanguages;
         private string _selectedLanguage;
         private ObservableCollection<string> _themes;
@@ -101,6 +106,11 @@ namespace GoldbergGUI.Core.ViewModels
                     AccountName = globalConfig.AccountName;
                     SteamId = globalConfig.UserSteamId;
                     SelectedLanguage = globalConfig.Language;
+                    CustomBroadcastIps = string.Join(Environment.NewLine, globalConfig.CustomBroadcastIps ?? new List<string>());
+                    _globalSteamclientPreference = globalConfig.UseSteamclientMode;
+                    // Set backing field directly on init to avoid triggering auto-save
+                    _useSteamclientMode = _globalSteamclientPreference;
+                    RaisePropertyChanged(() => UseSteamclientMode);
                 }
                 catch (Exception e)
                 {
@@ -344,6 +354,48 @@ namespace GoldbergGUI.Core.ViewModels
             set { _goldbergApplied = value; RaisePropertyChanged(() => GoldbergApplied); }
         }
 
+        public bool SteamclientModeApplied
+        {
+            get => _steamclientModeApplied;
+            set { _steamclientModeApplied = value; RaisePropertyChanged(() => SteamclientModeApplied); }
+        }
+
+        public bool UseSteamclientMode
+        {
+            get => _useSteamclientMode;
+            set
+            {
+                if (_useSteamclientMode == value) return;
+                _useSteamclientMode = value;
+                _globalSteamclientPreference = value;
+                RaisePropertyChanged(() => UseSteamclientMode);
+                // Persist immediately so closing without pressing Save still remembers the choice
+                _ = PersistGlobalSteamclientPreference();
+            }
+        }
+
+        public string CustomBroadcastIps
+        {
+            get => string.Join(Environment.NewLine, _customBroadcastIps);
+            set
+            {
+                _customBroadcastIps = (value ?? "")
+                    .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                RaisePropertyChanged(() => CustomBroadcastIps);
+            }
+        }
+
+        private Task PersistGlobalSteamclientPreference() =>
+            _goldberg.SetGlobalSettings(new GoldbergGlobalConfiguration
+            {
+                AccountName        = AccountName,
+                UserSteamId        = SteamId,
+                Language           = SelectedLanguage,
+                CustomBroadcastIps = _customBroadcastIps,
+                UseSteamclientMode = _globalSteamclientPreference
+            });
+
         public string StatusText
         {
             get => _statusText;
@@ -446,6 +498,7 @@ namespace GoldbergGUI.Core.ViewModels
             }
 
             DllPath = dialog.FileName;
+            _steamclientGameDir = null; // clear cached gameDir so ReadConfig searches fresh
             await ReadConfig().ConfigureAwait(false);
             if (!GoldbergApplied) await GetListOfDlc().ConfigureAwait(false);
             MainWindowEnabled = true;
@@ -557,11 +610,15 @@ namespace GoldbergGUI.Core.ViewModels
         private async Task SaveConfig()
         {
             _log.Info("Saving global settings...");
+            // Persist whatever the user currently has checked as the global preference
+            _globalSteamclientPreference = UseSteamclientMode;
             await _goldberg.SetGlobalSettings(new GoldbergGlobalConfiguration
             {
-                AccountName = AccountName,
-                UserSteamId = SteamId,
-                Language = SelectedLanguage
+                AccountName        = AccountName,
+                UserSteamId        = SteamId,
+                Language           = SelectedLanguage,
+                CustomBroadcastIps = _customBroadcastIps,
+                UseSteamclientMode = _globalSteamclientPreference
             }).ConfigureAwait(false);
 
             if (!DllSelected) return;
@@ -570,7 +627,8 @@ namespace GoldbergGUI.Core.ViewModels
             _log.Info("Saving Goldberg settings...");
             MainWindowEnabled = false;
             StatusText = "Saving...";
-            await _goldberg.Save(dirPath, new GoldbergConfiguration
+
+            var config = new GoldbergConfiguration
             {
                 AppId = AppId,
                 Achievements = Achievements.ToList(),
@@ -578,11 +636,59 @@ namespace GoldbergGUI.Core.ViewModels
                 Offline = Offline,
                 DisableNetworking = DisableNetworking,
                 DisableOverlay = DisableOverlay
-            }).ConfigureAwait(false);
+            };
+
+            if (UseSteamclientMode)
+            {
+                // Steamclient mode: restore original steam_api.dll, then set up loader
+                // First revert any direct DLL replacement
+                await _goldberg.RevertDllOnly(dirPath).ConfigureAwait(true);
+                // Save config files (steam_settings etc) without touching DLLs
+                await _goldberg.SaveConfigOnly(dirPath, config).ConfigureAwait(true);
+                // Ask for exe if ColdClientLoader.ini doesn't exist yet
+                if (!_goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath)))
+                {
+                    var dialog = new OpenFileDialog
+                    {
+                        Filter = "Executable|*.exe|All files (*.*)|*.*",
+                        Title = "Select the game executable for the steamclient loader...",
+                        InitialDirectory = dirPath
+                    };
+                    MainWindowEnabled = true;
+                    if (dialog.ShowDialog() != true)
+                    {
+                        StatusText = "Steamclient setup cancelled. Ready.";
+                        return;
+                    }
+                    MainWindowEnabled = false;
+                    _steamclientGameDir = Path.GetDirectoryName(dialog.FileName) ?? dirPath;
+                    await _goldberg.SetupSteamclientMode(_steamclientGameDir, Path.GetFileName(dialog.FileName), AppId)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    // Already set up — just update the AppId in the ini
+                    var gameDir = GetSteamclientGameDir(dirPath);
+                    _steamclientGameDir = gameDir;
+                    await _goldberg.SetupSteamclientMode(gameDir,
+                        _goldberg.GetSteamclientExeName(gameDir), AppId).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                // Normal mode: always remove any steamclient files from the correct gameDir,
+                // then apply directly to steam_api
+                await _goldberg.RevertSteamclientMode(GetSteamclientGameDir(dirPath)).ConfigureAwait(false);
+                _steamclientGameDir = null;
+                await _goldberg.Save(dirPath, config).ConfigureAwait(false);
+            }
 
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+            SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
             MainWindowEnabled = true;
-            StatusText = "Ready.";
+            StatusText = UseSteamclientMode
+                ? "Saved! Launch the game via steamclient_loader_x64.exe (or x32). Ready."
+                : "Ready.";
         }
 
         private async Task RevertConfig()
@@ -605,8 +711,14 @@ namespace GoldbergGUI.Core.ViewModels
 
             MainWindowEnabled = false;
             StatusText = "Reverting...";
+            var steamclientGameDir = GetSteamclientGameDir(dirPath);
             await _goldberg.Revert(dirPath).ConfigureAwait(false);
+            // Also clean up steamclient files from gameDir if it differs from dirPath
+            if (!string.Equals(steamclientGameDir, dirPath, StringComparison.OrdinalIgnoreCase))
+                await _goldberg.RevertSteamclientMode(steamclientGameDir).ConfigureAwait(false);
+            _steamclientGameDir = null;
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+            SteamclientModeApplied = _goldberg.SteamclientModeApplied(dirPath);
 
             AppId = -1;
             Achievements = new ObservableCollection<Achievement>();
@@ -614,6 +726,10 @@ namespace GoldbergGUI.Core.ViewModels
             Offline = false;
             DisableNetworking = false;
             DisableOverlay = false;
+            // Reset backing field directly — do NOT use the property setter here as it
+            // would auto-save and wipe the user's global steamclient preference.
+            _useSteamclientMode = false;
+            RaisePropertyChanged(() => UseSteamclientMode);
 
             MainWindowEnabled = true;
             StatusText = "Reverted successfully! Ready.";
@@ -713,6 +829,10 @@ namespace GoldbergGUI.Core.ViewModels
             var config = await _goldberg.Read(dirPath).ConfigureAwait(false);
             SetFormFromConfig(config);
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+            SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
+            // UseSteamclientMode is intentionally NOT updated here — it is a global preference
+            // that persists across game switches and app restarts, and is only changed by the
+            // user manually toggling the Global Settings checkbox.
             await RaisePropertyChanged(() => SteamInterfacesTxtExists).ConfigureAwait(false);
         }
 
@@ -739,6 +859,29 @@ namespace GoldbergGUI.Core.ViewModels
 
             _log.Error($"Invalid directory for {DllPath}.");
             return false;
+        }
+
+        /// <summary>
+        /// Returns the directory where steamclient loader files were written.
+        /// Uses the cached _steamclientGameDir if set, otherwise searches for
+        /// ColdClientLoader.ini near dirPath (same folder, then parent folder).
+        /// Falls back to dirPath itself if not found.
+        /// </summary>
+        private string GetSteamclientGameDir(string dirPath)
+        {
+            if (!string.IsNullOrEmpty(_steamclientGameDir) && Directory.Exists(_steamclientGameDir))
+                return _steamclientGameDir;
+
+            // Check dirPath itself
+            if (File.Exists(Path.Combine(dirPath, "ColdClientLoader.ini")))
+                return dirPath;
+
+            // Check one level up (exe may be in parent of dll subfolder)
+            var parent = Directory.GetParent(dirPath)?.FullName;
+            if (parent != null && File.Exists(Path.Combine(parent, "ColdClientLoader.ini")))
+                return parent;
+
+            return dirPath;
         }
     }
 }

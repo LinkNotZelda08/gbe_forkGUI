@@ -80,6 +80,14 @@ namespace GoldbergGUI.Core.Services
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
             "Chrome/87.0.4280.88 Safari/537.36";
         private const string AppTypeGame = "game";
+
+        private static readonly HttpClient _httpClient;
+
+        static SteamService()
+        {
+            _httpClient = new HttpClient();
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
+        }
         private const string AppTypeDlc = "dlc";
         private const string Database = "steamapps.cache";
         private const string GameSchemaUrl = "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/";
@@ -112,14 +120,13 @@ namespace GoldbergGUI.Core.Services
                     _log.Info($"Updating cache ({appType})...");
                     bool haveMoreResults;
                     long lastAppId = 0;
-                    var client = new HttpClient();
                     var cacheRaw = new HashSet<SteamApp>();
                     do
                     {
                         var response = lastAppId > 0
-                            ? await client.GetAsync($"{steamCache.SteamUri}&last_appid={lastAppId}")
+                            ? await _httpClient.GetAsync($"{steamCache.SteamUri}&last_appid={lastAppId}")
                                 .ConfigureAwait(false)
-                            : await client.GetAsync(steamCache.SteamUri).ConfigureAwait(false);
+                            : await _httpClient.GetAsync(steamCache.SteamUri).ConfigureAwait(false);
                         var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                         var steamApps = DeserializeSteamApps(steamCache.ApiVersion, responseBody);
                         foreach (var appListApp in steamApps.AppList.Apps) cacheRaw.Add(appListApp);
@@ -180,11 +187,9 @@ namespace GoldbergGUI.Core.Services
 
             _log.Info($"Getting achievements for App {steamApp}");
 
-            var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
             var apiUrl = $"{GameSchemaUrl}?key={Secrets.SteamWebApiKey()}&appid={steamApp.AppId}&l=en";
 
-            var response = await client.GetAsync(apiUrl);
+            var response = await _httpClient.GetAsync(apiUrl);
             var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             var jsonResponse = JsonDocument.Parse(responseBody);
@@ -206,14 +211,14 @@ namespace GoldbergGUI.Core.Services
                 var steamAppDetails = await task.ConfigureAwait(true);
                 if (steamAppDetails.Type == AppTypeGame)
                 {
-                    steamAppDetails.DLC.ForEach(async x =>
+                    foreach (var x in steamAppDetails.DLC)
                     {
                         var result = await _db.Table<SteamApp>().Where(z => z.AppType == AppTypeDlc)
-                                         .FirstOrDefaultAsync(y => y.AppId.Equals(x)).ConfigureAwait(true)
+                                         .FirstOrDefaultAsync(y => y.AppId.Equals(x)).ConfigureAwait(false)
                                      ?? new SteamApp() { AppId = x, Name = $"Unknown DLC {x}", ComparableName = $"unknownDlc{x}", AppType = AppTypeDlc };
                         dlcList.Add(new DlcApp(result));
                         _log.Debug($"{result.AppId}={result.Name}");
-                    });
+                    }
 
                     _log.Info("Got DLC successfully...");
 
@@ -229,11 +234,8 @@ namespace GoldbergGUI.Core.Services
                     {
                         var steamDbUri = new Uri($"https://steamdb.info/app/{steamApp.AppId}/dlc/");
 
-                        var client = new HttpClient();
-                        client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
-
                         _log.Info($"Get SteamDB App {steamApp}");
-                        var httpCall = client.GetAsync(steamDbUri);
+                        var httpCall = _httpClient.GetAsync(steamDbUri);
                         var response = await httpCall.ConfigureAwait(false);
                         _log.Debug(httpCall.Status.ToString());
                         _log.Debug(response.EnsureSuccessStatusCode().ToString());
@@ -280,7 +282,7 @@ namespace GoldbergGUI.Core.Services
                     catch (Exception e)
                     {
                         _log.Error("Could not get DLC from SteamDB! Skipping...");
-                        _log.Error(e.ToString);
+                        _log.Error(e.ToString());
                     }
                 }
                 else
