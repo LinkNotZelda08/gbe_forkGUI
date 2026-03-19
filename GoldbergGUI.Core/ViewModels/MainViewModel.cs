@@ -453,7 +453,8 @@ namespace GoldbergGUI.Core.ViewModels
         }
 
         public static string AboutVersionText =>
-            FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).FileVersion;
+            FileVersionInfo.GetVersionInfo(
+                Environment.ProcessPath ?? Assembly.GetExecutingAssembly().Location).FileVersion;
 
         public static GlobalHelp G => new GlobalHelp();
 

@@ -3,7 +3,7 @@
 	<PropertyGroup>
 		<TargetFramework>net10.0-windows</TargetFramework>
     	<UseWPF>true</UseWPF>
-		<FileVersion>V3</FileVersion>
+		<FileVersion>V4</FileVersion>
 		<Company>LinkNotZelda08</Company>
 		<Platforms>AnyCPU;x86;x64</Platforms>
 	</PropertyGroup>
