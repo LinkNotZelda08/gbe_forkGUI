@@ -25,6 +25,7 @@ namespace GoldbergGUI.Core.Services
         public Task<SteamApp> GetAppById(int appid);
         public Task<List<Achievement>> GetListOfAchievements(SteamApp steamApp);
         public Task<List<DlcApp>> GetListOfDlc(SteamApp steamApp, bool useSteamDb);
+        public Task<WorkshopMod> GetWorkshopModInfo(long workshopId);
     }
 
     class SteamCache
@@ -296,6 +297,54 @@ namespace GoldbergGUI.Core.Services
             }
 
             return dlcList;
+        }
+
+        public async Task<WorkshopMod> GetWorkshopModInfo(long workshopId)
+        {
+            _log.Info($"Fetching Steam Workshop info for item {workshopId}...");
+            // Including the API key causes the endpoint to return the full response,
+            // including the "children" array (required items / dependencies).
+            var url = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/" +
+                      "?key=" + Secrets.SteamWebApiKey();
+
+            var content = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("itemcount", "1"),
+                new KeyValuePair<string, string>("publishedfileids[0]", workshopId.ToString())
+            });
+
+            try
+            {
+                var response = await _httpClient.PostAsync(url, content).ConfigureAwait(false);
+                var body     = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                _log.Debug($"[Workshop API] Raw response for {workshopId}: {body}");
+                var doc      = JsonDocument.Parse(body);
+
+                var details = doc.RootElement
+                    .GetProperty("response")
+                    .GetProperty("publishedfiledetails")[0];
+
+                var result = details.GetProperty("result").GetInt32();
+                if (result != 1)
+                {
+                    _log.Warn($"Workshop item {workshopId} returned result code {result}.");
+                    return new WorkshopMod { WorkshopId = workshopId, Name = $"Unknown Mod ({workshopId})" };
+                }
+
+                var title = details.TryGetProperty("title", out var t) ? t.GetString() : null;
+                _log.Info($"Got workshop info: {title}");
+
+                return new WorkshopMod
+                {
+                    WorkshopId = workshopId,
+                    Name       = string.IsNullOrWhiteSpace(title) ? $"Unknown Mod ({workshopId})" : title,
+                };
+            }
+            catch (Exception e)
+            {
+                _log.Error($"Failed to fetch workshop info for {workshopId}: {e.Message}");
+                return new WorkshopMod { WorkshopId = workshopId, Name = $"Unknown Mod ({workshopId})" };
+            }
         }
 
         private static string PrepareStringToCompare(string name)

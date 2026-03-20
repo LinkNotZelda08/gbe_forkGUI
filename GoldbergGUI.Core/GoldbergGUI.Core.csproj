@@ -3,7 +3,7 @@
 	<PropertyGroup>
 		<TargetFramework>net10.0-windows</TargetFramework>
     	<UseWPF>true</UseWPF>
-		<FileVersion>V4</FileVersion>
+		<FileVersion>V5</FileVersion>
 		<Company>LinkNotZelda08</Company>
 		<Platforms>AnyCPU;x86;x64</Platforms>
 	</PropertyGroup>
@@ -12,7 +12,7 @@
 		<PackageReference Include="AngleSharp" Version="1.4.0" />
 		<PackageReference Include="MvvmCross" Version="7.1.2" />
 		<PackageReference Include="NinjaNye.SearchExtensions" Version="4.0.1" />
-		<PackageReference Include="SharpCompress" Version="0.44.5" />
+		<PackageReference Include="SharpCompress" Version="1.0.0" />
 		<PackageReference Include="sqlite-net-pcl" Version="1.9.172" />
 		<PackageReference Include="SteamStorefrontAPI" Version="3.0.0.1561" />
 	</ItemGroup>

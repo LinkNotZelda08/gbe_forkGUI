@@ -29,6 +29,10 @@ namespace GoldbergGUI.Core.Models
         /// Persisted globally so the preference is remembered across games and app restarts.
         /// </summary>
         public bool UseSteamclientMode { get; set; }
+        /// <summary>
+        /// Full path to steamcmd.exe. Empty or null means auto-download on first use.
+        /// </summary>
+        public string SteamCmdPath { get; set; }
     }
     public class GoldbergConfiguration
     {
@@ -54,6 +58,11 @@ namespace GoldbergGUI.Core.Models
         public List<Leaderboard> Leaderboards { get; set; }
 
         public List<Stat> Stats { get; set; }
+
+        /// <summary>
+        /// Steam Workshop mods subscribed for this game.
+        /// </summary>
+        public List<WorkshopMod> WorkshopMods { get; set; }
 
         // Add controller setting here!
         /// <summary>
@@ -111,6 +120,47 @@ namespace GoldbergGUI.Core.Models
                 NotifyPropertyChanged(nameof(Enabled));
             }
         }
+    }
+
+    public class WorkshopMod : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+
+        private void NotifyPropertyChanged(string propertyName) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
+
+        /// <summary>Steam Workshop item ID (publishedfileid).</summary>
+        public long WorkshopId { get; set; }
+
+        private string _name = string.Empty;
+        /// <summary>Display name fetched from the Steam API; persisted in mods_list.txt.</summary>
+        public string Name
+        {
+            get => _name;
+            set { if (_name == value) return; _name = value; NotifyPropertyChanged(nameof(Name)); }
+        }
+
+        private bool _enabled = true;
+        /// <summary>Whether this mod is active. Disabled mods are moved to mods_disabled/ on Save.</summary>
+        public bool Enabled
+        {
+            get => _enabled;
+            set { if (_enabled == value) return; _enabled = value; NotifyPropertyChanged(nameof(Enabled)); }
+        }
+
+        /// <summary>True when files exist in either the active or disabled folder. Not persisted.</summary>
+        [JsonIgnore]
+        public bool Downloaded { get; set; }
+
+        private string _status = string.Empty;
+        /// <summary>UI status string: "Ready", "Disabled", "Downloading...", "Error", "Not downloaded".</summary>
+        [JsonIgnore]
+        public string Status
+        {
+            get => _status;
+            set { if (_status == value) return; _status = value; NotifyPropertyChanged(nameof(Status)); }
+        }
+
     }
 
     public class Group

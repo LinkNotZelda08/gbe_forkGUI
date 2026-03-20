@@ -5,13 +5,16 @@ using SharpCompress.Archives;
 using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Xml.Linq;
 
 namespace GoldbergGUI.Core.Services
 {
@@ -34,6 +37,9 @@ namespace GoldbergGUI.Core.Services
         bool SteamclientModeApplied(string path);
         string GetSteamclientExeName(string path);
         List<string> Languages();
+        Task<bool> DownloadWorkshopMod(string gamePath, int appId, WorkshopMod mod,
+            string steamCmdExe, Action<string> statusCallback);
+        Task<string> EnsureSteamCmd(string preferredPath, Action<string> statusCallback);
     }
 
     // ReSharper disable once UnusedType.Global
@@ -126,7 +132,8 @@ namespace GoldbergGUI.Core.Services
             var steamId          = DefaultSteamId;
             var language         = DefaultLanguage;
             var customBroadcastIps = new List<string>();
-            var useSteamclientMode = false;
+            var useSteamclientMode      = false;
+            var steamCmdPath            = string.Empty;
 
             if (File.Exists(_globalUserIniPath))
             {
@@ -148,6 +155,10 @@ namespace GoldbergGUI.Core.Services
 
                         if (general.TryGetValue("use_steamclient_mode", out var scMode))
                             bool.TryParse(scMode.Trim(), out useSteamclientMode);
+
+                        if (general.TryGetValue("steamcmd_path", out var scp) && !string.IsNullOrWhiteSpace(scp))
+                            steamCmdPath = scp.Trim();
+
                     }
 
                     if (ini.TryGetValue("user::saves", out var saves) &&
@@ -163,11 +174,12 @@ namespace GoldbergGUI.Core.Services
             _log.Info("Got global settings.");
             return new GoldbergGlobalConfiguration
             {
-                AccountName        = accountName,
-                UserSteamId        = steamId,
-                Language           = language,
-                CustomBroadcastIps = customBroadcastIps,
-                UseSteamclientMode = useSteamclientMode
+                AccountName             = accountName,
+                UserSteamId             = steamId,
+                Language                = language,
+                CustomBroadcastIps      = customBroadcastIps,
+                UseSteamclientMode      = useSteamclientMode,
+                SteamCmdPath            = steamCmdPath,
             };
         }
 
@@ -189,6 +201,8 @@ namespace GoldbergGUI.Core.Services
             sb.AppendLine($"account_steamid={userSteamId}");
             sb.AppendLine($"language={language}");
             sb.AppendLine($"use_steamclient_mode={c.UseSteamclientMode.ToString().ToLower()}");
+            if (!string.IsNullOrEmpty(c.SteamCmdPath))
+                sb.AppendLine($"steamcmd_path={c.SteamCmdPath}");
             sb.AppendLine();
 
             if (c.CustomBroadcastIps?.Count > 0)
@@ -348,6 +362,66 @@ namespace GoldbergGUI.Core.Services
                 disableOverlay    = File.Exists(Path.Combine(path, "steam_settings", "disable_overlay.txt"));
             }
 
+            // Workshop mods: read from steam_settings/mods/ and steam_settings/mods_disabled/
+            var modList         = new List<WorkshopMod>();
+            var modsDir         = Path.Combine(path, "steam_settings", "mods");
+            var modsDisabledDir = Path.Combine(path, "steam_settings", "mods_disabled");
+            var modsListPath    = Path.Combine(modsDir, "mods_list.txt");
+
+            if (File.Exists(modsListPath))
+            {
+                _log.Info("Reading workshop mods from mods_list.txt...");
+                await Task.Run(() =>
+                {
+                    foreach (var line in File.ReadAllLines(modsListPath))
+                    {
+                        // Format: workshopid=Name=enabled(1/0)
+                        var parts = line.Split('=');
+                        if (parts.Length < 2) continue;
+                        if (!long.TryParse(parts[0].Trim(), out var wid)) continue;
+                        var modName = parts.Length >= 2 ? parts[1].Trim() : $"Mod {wid}";
+                        var enabled = parts.Length < 3 || parts[2].Trim() != "0";
+                        var activeDir   = Path.Combine(modsDir, wid.ToString());
+                        var disabledDir = Path.Combine(modsDisabledDir, wid.ToString());
+                        var downloaded  = Directory.Exists(activeDir) || Directory.Exists(disabledDir);
+                        var status      = Directory.Exists(activeDir)   ? "Ready"
+                                        : Directory.Exists(disabledDir) ? "Disabled"
+                                        : "Not downloaded";
+                        modList.Add(new WorkshopMod
+                        {
+                            WorkshopId = wid,
+                            Name       = string.IsNullOrEmpty(modName) ? $"Mod {wid}" : modName,
+                            Enabled    = enabled,
+                            Downloaded = downloaded,
+                            Status     = status,
+                        });
+                    }
+                }).ConfigureAwait(false);
+            }
+            else
+            {
+                // No mods_list.txt — scan directories for manually placed mods
+                await Task.Run(() =>
+                {
+                    if (Directory.Exists(modsDir))
+                        foreach (var subDir in Directory.GetDirectories(modsDir))
+                        {
+                            if (!long.TryParse(Path.GetFileName(subDir), out var wid)) continue;
+                            modList.Add(new WorkshopMod { WorkshopId = wid, Name = $"Mod {wid}", Enabled = true, Downloaded = true, Status = "Ready" });
+                        }
+
+                    if (Directory.Exists(modsDisabledDir))
+                        foreach (var subDir in Directory.GetDirectories(modsDisabledDir))
+                        {
+                            if (!long.TryParse(Path.GetFileName(subDir), out var wid)) continue;
+                            if (modList.Any(m => m.WorkshopId == wid)) continue; // already seen
+                            modList.Add(new WorkshopMod { WorkshopId = wid, Name = $"Mod {wid}", Enabled = false, Downloaded = true, Status = "Disabled" });
+                        }
+                }).ConfigureAwait(false);
+            }
+
+            _log.Info($"Loaded {modList.Count} workshop mod(s).");
+
             return new GoldbergConfiguration
             {
                 AppId             = appId,
@@ -355,7 +429,8 @@ namespace GoldbergGUI.Core.Services
                 DlcList           = dlcList,
                 Offline           = offline,
                 DisableNetworking = disableNetworking,
-                DisableOverlay    = disableOverlay
+                DisableOverlay    = disableOverlay,
+                WorkshopMods      = modList
             };
         }
 
@@ -527,6 +602,47 @@ namespace GoldbergGUI.Core.Services
             mainIni["main::connectivity"]["disable_overlay"]    = c.DisableOverlay    ? "1" : "0";
 
             await File.WriteAllTextAsync(configsMainPath, SerializeIni(mainIni)).ConfigureAwait(false);
+
+            // Workshop mods: move folders between mods/ and mods_disabled/ based on Enabled flag
+            if (c.WorkshopMods != null && c.WorkshopMods.Count > 0)
+            {
+                var modsDir         = Path.Combine(settingsDir, "mods");
+                var modsDisabledDir = Path.Combine(settingsDir, "mods_disabled");
+                EnsureDirectory(modsDir);
+                EnsureDirectory(modsDisabledDir);
+
+                await Task.Run(() =>
+                {
+                    foreach (var mod in c.WorkshopMods)
+                    {
+                        var idStr       = mod.WorkshopId.ToString();
+                        var activeDir   = Path.Combine(modsDir, idStr);
+                        var disabledDir = Path.Combine(modsDisabledDir, idStr);
+
+                        if (mod.Enabled)
+                        {
+                            // Move from disabled to active if needed
+                            if (Directory.Exists(disabledDir) && !Directory.Exists(activeDir))
+                                Directory.Move(disabledDir, activeDir);
+                        }
+                        else
+                        {
+                            // Move from active to disabled if needed
+                            if (Directory.Exists(activeDir) && !Directory.Exists(disabledDir))
+                                Directory.Move(activeDir, disabledDir);
+                        }
+                    }
+                }).ConfigureAwait(false);
+
+                // Write mods_list.txt index (workshopid=Name=enabled)
+                var sb2 = new StringBuilder();
+                foreach (var mod in c.WorkshopMods)
+                    sb2.AppendLine($"{mod.WorkshopId}={mod.Name}={(mod.Enabled ? "1" : "0")}");
+                await File.WriteAllTextAsync(Path.Combine(modsDir, "mods_list.txt"), sb2.ToString())
+                    .ConfigureAwait(false);
+
+                _log.Info($"Saved {c.WorkshopMods.Count} workshop mod(s).");
+            }
         }
 
         // -----------------------------------------------------------------------
@@ -606,12 +722,14 @@ namespace GoldbergGUI.Core.Services
                     }
                 }
 
-                // Remove steam_settings folder
+                // Remove steam_settings folder (uses ForceDeleteDirectory because
+                // SteamCMD-downloaded mod files can have read-only attributes that would
+                // cause a plain Directory.Delete to throw UnauthorizedAccessException).
                 var settingsDir = Path.Combine(path, "steam_settings");
                 if (Directory.Exists(settingsDir))
                 {
                     _log.Info("Removing steam_settings folder...");
-                    Directory.Delete(settingsDir, true);
+                    ForceDeleteDirectory(settingsDir);
                 }
 
                 // Remove steam_appid.txt beside the DLL
@@ -660,16 +778,14 @@ namespace GoldbergGUI.Core.Services
                     DeleteIfExists(Path.Combine(path, file));
 
                 // Remove extra_dlls folder from both locations
-                var extraDllsInPath = Path.Combine(path, "extra_dlls");
-                if (Directory.Exists(extraDllsInPath)) Directory.Delete(extraDllsInPath, true);
+                ForceDeleteDirectory(Path.Combine(path, "extra_dlls"));
 
                 if (gameDir != null && !string.Equals(gameDir, path, StringComparison.OrdinalIgnoreCase))
                 {
                     _log.Info($"Also cleaning steamclient files from gameDir: {gameDir}");
                     foreach (var file in steamclientFiles)
                         DeleteIfExists(Path.Combine(gameDir, file));
-                    var extraDllsInGameDir = Path.Combine(gameDir, "extra_dlls");
-                    if (Directory.Exists(extraDllsInGameDir)) Directory.Delete(extraDllsInGameDir, true);
+                    ForceDeleteDirectory(Path.Combine(gameDir, "extra_dlls"));
                 }
             }).ConfigureAwait(false);
 
@@ -764,8 +880,7 @@ namespace GoldbergGUI.Core.Services
                     DeleteIfExists(Path.Combine(path, file));
 
                 // Remove extra_dlls folder
-                var extraDlls = Path.Combine(path, "extra_dlls");
-                if (Directory.Exists(extraDlls)) Directory.Delete(extraDlls, true);
+                ForceDeleteDirectory(Path.Combine(path, "extra_dlls"));
             }).ConfigureAwait(false);
             _log.Info("Steamclient mode reverted.");
         }
@@ -1097,8 +1212,153 @@ namespace GoldbergGUI.Core.Services
             if (File.Exists(path)) File.Delete(path);
         }
 
+        /// <summary>
+        /// Recursively clears read-only (and other restrictive) attributes on every file inside
+        /// <paramref name="path"/> before calling Directory.Delete. SteamCMD marks downloaded
+        /// workshop files as read-only, which causes Directory.Delete to throw
+        /// UnauthorizedAccessException without this step.
+        /// </summary>
+        private static void ForceDeleteDirectory(string path)
+        {
+            if (!Directory.Exists(path)) return;
+            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            {
+                try { File.SetAttributes(file, FileAttributes.Normal); }
+                catch { /* best-effort */ }
+            }
+            Directory.Delete(path, true);
+        }
+
         /// <summary>Returns the first path that exists, or null if none do.</summary>
         private static string FirstExisting(params string[] paths) =>
             paths.FirstOrDefault(File.Exists);
+
+        // -----------------------------------------------------------------------
+        // Workshop mod download via SteamCMD
+        // -----------------------------------------------------------------------
+        public async Task<bool> DownloadWorkshopMod(string gamePath, int appId, WorkshopMod mod,
+            string steamCmdExe, Action<string> statusCallback)
+        {
+            if (!File.Exists(steamCmdExe))
+            {
+                _log.Error($"steamcmd.exe not found at: {steamCmdExe}");
+                return false;
+            }
+
+            var workshopId  = mod.WorkshopId;
+            var steamCmdDir = Path.GetDirectoryName(steamCmdExe)!;
+
+            var args = $"+login anonymous +workshop_download_item {appId} {workshopId} +quit";
+
+            statusCallback?.Invoke($"Downloading mod {workshopId} via SteamCMD...");
+            _log.Info($"Running steamcmd: {steamCmdExe} {args}");
+
+            var psi = new ProcessStartInfo
+            {
+                FileName               = steamCmdExe,
+                Arguments              = args,
+                UseShellExecute        = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                CreateNoWindow         = true
+            };
+
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            await Task.WhenAll(Task.Run(() => process.WaitForExit()), stdout, stderr).ConfigureAwait(false);
+
+            if (process.ExitCode != 0)
+            {
+                _log.Error($"SteamCMD exited with code {process.ExitCode}. Stderr: {stderr.Result}");
+                return false;
+            }
+
+            // SteamCMD places files at: <steamcmd_dir>/steamapps/workshop/content/<appid>/<workshopid>/
+            var downloadedDir = Path.Combine(
+                steamCmdDir, "steamapps", "workshop", "content",
+                appId.ToString(), workshopId.ToString());
+
+            if (!Directory.Exists(downloadedDir))
+            {
+                _log.Error($"SteamCMD finished but download dir not found: {downloadedDir}");
+                return false;
+            }
+
+            var targetDir = Path.Combine(gamePath, "steam_settings", "mods", workshopId.ToString());
+            EnsureDirectory(targetDir);
+
+            await Task.Run(() =>
+            {
+                foreach (var srcFile in Directory.GetFiles(downloadedDir, "*", SearchOption.AllDirectories))
+                {
+                    var relative = Path.GetRelativePath(downloadedDir, srcFile);
+                    var dst      = Path.Combine(targetDir, relative);
+                    EnsureDirectory(Path.GetDirectoryName(dst)!);
+                    File.Copy(srcFile, dst, overwrite: true);
+                    // SteamCMD marks downloaded files as read-only; clear that so
+                    // future overwrites and directory deletions work without errors.
+                    File.SetAttributes(dst, FileAttributes.Normal);
+                }
+            }).ConfigureAwait(false);
+
+            statusCallback?.Invoke($"Mod {workshopId} downloaded successfully.");
+            _log.Info($"Workshop mod {workshopId} downloaded to {targetDir}.");
+            return true;
+        }
+
+        private const string SteamCmdDownloadUrl =
+            "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
+
+        public async Task<string> EnsureSteamCmd(string preferredPath, Action<string> statusCallback)
+        {
+            // Use configured path if valid
+            if (!string.IsNullOrEmpty(preferredPath) && File.Exists(preferredPath))
+                return preferredPath;
+
+            // Auto-download location: <app_dir>/steamcmd/steamcmd.exe
+            var steamCmdDir = Path.Combine(Directory.GetCurrentDirectory(), "steamcmd");
+            var steamCmdExe = Path.Combine(steamCmdDir, "steamcmd.exe");
+
+            if (File.Exists(steamCmdExe))
+                return steamCmdExe;
+
+            statusCallback?.Invoke("Downloading SteamCMD...");
+            _log.Info("SteamCMD not found — downloading from Valve...");
+
+            EnsureDirectory(steamCmdDir);
+            var zipPath = Path.Combine(steamCmdDir, "steamcmd.zip");
+
+            var data = await _httpClient.GetByteArrayAsync(SteamCmdDownloadUrl).ConfigureAwait(false);
+            await File.WriteAllBytesAsync(zipPath, data).ConfigureAwait(false);
+
+            await Task.Run(() =>
+                ZipFile.ExtractToDirectory(zipPath, steamCmdDir, overwriteFiles: true)
+            ).ConfigureAwait(false);
+
+            File.Delete(zipPath);
+
+            if (!File.Exists(steamCmdExe))
+            {
+                _log.Error("steamcmd.exe not found after extraction.");
+                return null;
+            }
+
+            // Run once to let SteamCMD self-update
+            statusCallback?.Invoke("Initializing SteamCMD (first run)...");
+            var psi = new ProcessStartInfo
+            {
+                FileName        = steamCmdExe,
+                Arguments       = "+quit",
+                UseShellExecute = false,
+                CreateNoWindow  = true
+            };
+            using var p = Process.Start(psi);
+            await Task.Run(() => p?.WaitForExit()).ConfigureAwait(false);
+
+            _log.Info($"SteamCMD ready at {steamCmdExe}.");
+            return steamCmdExe;
+        }
     }
 }
