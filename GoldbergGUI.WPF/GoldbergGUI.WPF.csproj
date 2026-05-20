@@ -8,6 +8,8 @@
     <FileVersion>V5</FileVersion>
     <Company>LinkNotZelda08</Company>
     <Platforms>AnyCPU;x86;x64</Platforms>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>

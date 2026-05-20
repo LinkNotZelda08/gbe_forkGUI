@@ -29,10 +29,6 @@ namespace GoldbergGUI.Core.Models
         /// Persisted globally so the preference is remembered across games and app restarts.
         /// </summary>
         public bool UseSteamclientMode { get; set; }
-        /// <summary>
-        /// Full path to steamcmd.exe. Empty or null means auto-download on first use.
-        /// </summary>
-        public string SteamCmdPath { get; set; }
     }
     public class GoldbergConfiguration
     {
@@ -48,8 +44,6 @@ namespace GoldbergGUI.Core.Models
         public List<int> Depots { get; set; }
 
         public List<Group> SubscribedGroups { get; set; }
-
-        //public List<AppPath> AppPaths { get; set; }
 
         public List<Achievement> Achievements { get; set; }
 
@@ -148,6 +142,12 @@ namespace GoldbergGUI.Core.Models
             set { if (_enabled == value) return; _enabled = value; NotifyPropertyChanged(nameof(Enabled)); }
         }
 
+        /// <summary>
+        /// The primary file of the mod (e.g. "descriptor.mod"). Written to mods.json so the
+        /// emulator can serve the correct file to the game. Persisted in mods_list.txt.
+        /// </summary>
+        public string PrimaryFilename { get; set; } = string.Empty;
+
         /// <summary>True when files exist in either the active or disabled folder. Not persisted.</summary>
         [JsonIgnore]
         public bool Downloaded { get; set; }
@@ -159,6 +159,15 @@ namespace GoldbergGUI.Core.Models
         {
             get => _status;
             set { if (_status == value) return; _status = value; NotifyPropertyChanged(nameof(Status)); }
+        }
+
+        private string _sizeDisplay = string.Empty;
+        /// <summary>Human-readable size of the mod folder on disk (e.g. "12.3 MB"). Not persisted.</summary>
+        [JsonIgnore]
+        public string SizeDisplay
+        {
+            get => _sizeDisplay;
+            set { if (_sizeDisplay == value) return; _sizeDisplay = value; NotifyPropertyChanged(nameof(SizeDisplay)); }
         }
 
     }
@@ -224,7 +233,7 @@ namespace GoldbergGUI.Core.Models
         [JsonPropertyName("name")]
         public string Name { get; set; }
 
-        private bool _unlocked = false;
+        private bool _unlocked;
         /// <summary>
         /// Whether this achievement is unlocked. Not persisted to JSON.
         /// </summary>
@@ -376,7 +385,7 @@ namespace GoldbergGUI.Core.Models
         }
     }
 
-        public class HiddenConverter : System.Text.Json.Serialization.JsonConverter<int>
+    public class HiddenConverter : System.Text.Json.Serialization.JsonConverter<int>
     {
         public override int Read(ref System.Text.Json.Utf8JsonReader reader, Type typeToConvert,
             System.Text.Json.JsonSerializerOptions options)

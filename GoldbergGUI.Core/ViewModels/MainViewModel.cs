@@ -62,16 +62,24 @@ namespace GoldbergGUI.Core.ViewModels
         private string _selectedTheme;
         private ObservableCollection<WorkshopMod> _workshopMods;
         private bool? _allModsEnabled = true;
-        private string _workshopModInput = string.Empty;
-        private string _steamCmdPath = string.Empty;
-
-        // Command backing fields (lazy-initialised so bindings always get the same instance)
-        private IMvxCommand _addWorkshopModCommand;
+        // Command backing fields — all cached so bindings always get the same instance
+        private IMvxCommand _openFileCommand;
+        private IMvxCommand _findIdCommand;
+        private IMvxCommand _getListOfAchievementsCommand;
+        private IMvxCommand _getListOfDlcCommand;
+        private IMvxCommand _selectAllDlcCommand;
+        private IMvxCommand _deselectAllDlcCommand;
+        private IMvxCommand _saveConfigCommand;
+        private IMvxCommand _revertCommand;
+        private IMvxCommand _generateSteamInterfacesCommand;
+        private IMvxCommand _pasteDlcCommand;
+        private IMvxCommand _openGlobalSettingsFolderCommand;
+        private IMvxCommand _addModFolderCommand;
         private IMvxCommand _removeWorkshopModCommand;
-        private IMvxCommand _downloadModCommand;
         private IMvxCommand _moveModUpCommand;
         private IMvxCommand _moveModDownCommand;
-        private IMvxCommand _downloadAllModsCommand;
+
+        private static readonly Regex PasteDlcRegex = new Regex(@"(?<id>.*) *= *(?<n>.*)");
 
         // Placeholder sentinel so we can tell whether a real path has been set
         private const string DllPathPlaceholder = "Path to game's steam_api(64).dll...";
@@ -123,7 +131,6 @@ namespace GoldbergGUI.Core.ViewModels
                     // Set backing field directly on init to avoid triggering auto-save
                     _useSteamclientMode = _globalSteamclientPreference;
                     RaisePropertyChanged(() => UseSteamclientMode);
-                    SteamCmdPath = globalConfig.SteamCmdPath ?? string.Empty;
                 }
                 catch (Exception e)
                 {
@@ -134,11 +141,6 @@ namespace GoldbergGUI.Core.ViewModels
                 MainWindowEnabled = true;
                 StatusText = "Ready.";
             });
-        }
-
-        public override async Task Initialize()
-        {
-            await base.Initialize().ConfigureAwait(false);
         }
 
         // -----------------------------------------------------------------------
@@ -407,7 +409,6 @@ namespace GoldbergGUI.Core.ViewModels
                 Language                = SelectedLanguage,
                 CustomBroadcastIps      = _customBroadcastIps,
                 UseSteamclientMode = _globalSteamclientPreference,
-                SteamCmdPath       = SteamCmdPath,
             });
 
         public string StatusText
@@ -512,18 +513,6 @@ namespace GoldbergGUI.Core.ViewModels
             WorkshopMods = new ObservableCollection<WorkshopMod>(_workshopMods);
         }
 
-        public string WorkshopModInput
-        {
-            get => _workshopModInput;
-            set { _workshopModInput = value; RaisePropertyChanged(() => WorkshopModInput); }
-        }
-
-        public string SteamCmdPath
-        {
-            get => _steamCmdPath;
-            set { _steamCmdPath = value; RaisePropertyChanged(() => SteamCmdPath); }
-        }
-
         /// <summary>True when the steam_interfaces.txt has NOT yet been generated (button should be enabled).</summary>
         public bool SteamInterfacesTxtExists
         {
@@ -555,24 +544,21 @@ namespace GoldbergGUI.Core.ViewModels
         // Commands
         // -----------------------------------------------------------------------
 
-        public IMvxCommand OpenFileCommand           => new MvxAsyncCommand(OpenFile);
-        public IMvxCommand FindIdCommand             => new MvxAsyncCommand(FindId);
-        public IMvxCommand GetListOfAchievementsCommand => new MvxAsyncCommand(GetListOfAchievements);
-        public IMvxCommand GetListOfDlcCommand       => new MvxAsyncCommand(GetListOfDlc);
-        public IMvxCommand SelectAllDlcCommand       => new MvxCommand(() => SetAllDlcEnabled(true));
-        public IMvxCommand DeselectAllDlcCommand     => new MvxCommand(() => SetAllDlcEnabled(false));
-        public IMvxCommand SaveConfigCommand         => new MvxAsyncCommand(SaveConfig);
-        public IMvxCommand RevertCommand             => new MvxAsyncCommand(RevertConfig);
-        public IMvxCommand GenerateSteamInterfacesCommand => new MvxAsyncCommand(GenerateSteamInterfaces);
-        public IMvxCommand PasteDlcCommand           => new MvxCommand(PasteDlc);
-        public IMvxCommand OpenGlobalSettingsFolderCommand => new MvxCommand(OpenGlobalSettingsFolder);
-        public IMvxCommand AddWorkshopModCommand     => _addWorkshopModCommand    ??= new MvxAsyncCommand(AddWorkshopMod);
-        public IMvxCommand RemoveWorkshopModCommand  => _removeWorkshopModCommand ??= new MvxCommand<WorkshopMod>(RemoveWorkshopMod);
-        public IMvxCommand DownloadModCommand        => _downloadModCommand       ??= new MvxAsyncCommand<WorkshopMod>(DownloadMod);
-        public IMvxCommand MoveModUpCommand          => _moveModUpCommand         ??= new MvxCommand<WorkshopMod>(MoveModUp);
-        public IMvxCommand MoveModDownCommand        => _moveModDownCommand       ??= new MvxCommand<WorkshopMod>(MoveModDown);
-        public IMvxCommand DownloadAllModsCommand    => _downloadAllModsCommand   ??= new MvxAsyncCommand(DownloadAllMods);
-        public IMvxCommand BrowseSteamCmdCommand     => new MvxCommand(BrowseSteamCmd);
+        public IMvxCommand OpenFileCommand                => _openFileCommand                ??= new MvxAsyncCommand(OpenFile);
+        public IMvxCommand FindIdCommand                  => _findIdCommand                  ??= new MvxAsyncCommand(FindId);
+        public IMvxCommand GetListOfAchievementsCommand   => _getListOfAchievementsCommand   ??= new MvxAsyncCommand(GetListOfAchievements);
+        public IMvxCommand GetListOfDlcCommand            => _getListOfDlcCommand            ??= new MvxAsyncCommand(GetListOfDlc);
+        public IMvxCommand SelectAllDlcCommand            => _selectAllDlcCommand            ??= new MvxCommand(() => SetAllDlcEnabled(true));
+        public IMvxCommand DeselectAllDlcCommand          => _deselectAllDlcCommand          ??= new MvxCommand(() => SetAllDlcEnabled(false));
+        public IMvxCommand SaveConfigCommand              => _saveConfigCommand              ??= new MvxAsyncCommand(SaveConfig);
+        public IMvxCommand RevertCommand                  => _revertCommand                  ??= new MvxAsyncCommand(RevertConfig);
+        public IMvxCommand GenerateSteamInterfacesCommand => _generateSteamInterfacesCommand ??= new MvxAsyncCommand(GenerateSteamInterfaces);
+        public IMvxCommand PasteDlcCommand                => _pasteDlcCommand                ??= new MvxCommand(PasteDlc);
+        public IMvxCommand OpenGlobalSettingsFolderCommand => _openGlobalSettingsFolderCommand ??= new MvxCommand(OpenGlobalSettingsFolder);
+        public IMvxCommand AddModFolderCommand             => _addModFolderCommand            ??= new MvxAsyncCommand(AddModFolder);
+        public IMvxCommand RemoveWorkshopModCommand        => _removeWorkshopModCommand       ??= new MvxAsyncCommand<WorkshopMod>(RemoveWorkshopMod);
+        public IMvxCommand MoveModUpCommand                => _moveModUpCommand               ??= new MvxCommand<WorkshopMod>(MoveModUp);
+        public IMvxCommand MoveModDownCommand              => _moveModDownCommand             ??= new MvxCommand<WorkshopMod>(MoveModDown);
 
         // -----------------------------------------------------------------------
         // Command implementations
@@ -720,10 +706,13 @@ namespace GoldbergGUI.Core.ViewModels
                 Language                = SelectedLanguage,
                 CustomBroadcastIps      = _customBroadcastIps,
                 UseSteamclientMode = _globalSteamclientPreference,
-                SteamCmdPath       = SteamCmdPath,
             }).ConfigureAwait(false);
 
-            if (!DllSelected) return;
+            if (!DllSelected)
+            {
+                StatusText = "Global settings saved! Ready.";
+                return;
+            }
             if (!GetDllPathDir(out var dirPath)) return;
 
             _log.Info("Saving Goldberg settings...");
@@ -870,10 +859,9 @@ namespace GoldbergGUI.Core.ViewModels
                 return;
             }
 
-            var expression = new Regex(@"(?<id>.*) *= *(?<n>.*)");
             var pastedDlc = Clipboard.GetText()
                 .Split(new[] { "\n", "\r\n" }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => expression.Match(line))
+                .Select(line => PasteDlcRegex.Match(line))
                 .Where(m => m.Success)
                 .Select(m => new DlcApp
                 {
@@ -933,6 +921,27 @@ namespace GoldbergGUI.Core.ViewModels
             if (!GetDllPathDir(out var dirPath)) return;
             var config = await _goldberg.Read(dirPath).ConfigureAwait(false);
             SetFormFromConfig(config);
+
+            // Calculate sizes for loaded mods in the background, then apply on the UI thread.
+            var mods = _workshopMods.ToList();
+            var modsDir         = Path.Combine(dirPath, "steam_settings", "mods");
+            var modsDisabledDir = Path.Combine(dirPath, "steam_settings", "mods_disabled");
+            var sizes = await Task.Run(() => mods.ToDictionary(
+                m => m.WorkshopId,
+                m =>
+                {
+                    var active   = Path.Combine(modsDir,         m.WorkshopId.ToString());
+                    var disabled = Path.Combine(modsDisabledDir, m.WorkshopId.ToString());
+                    var folder   = Directory.Exists(active)   ? active
+                                 : Directory.Exists(disabled) ? disabled
+                                 : null;
+                    return folder != null ? FormatFolderSize(folder) : string.Empty;
+                }
+            )).ConfigureAwait(true);
+            foreach (var mod in mods)
+                if (sizes.TryGetValue(mod.WorkshopId, out var size))
+                    mod.SizeDisplay = size;
+
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
             SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
             // UseSteamclientMode is intentionally NOT updated here — it is a global preference
@@ -1005,116 +1014,171 @@ namespace GoldbergGUI.Core.ViewModels
             UpdateAllModsEnabledState();
         }
 
-        private async Task AddWorkshopMod()
+        private async Task AddModFolder()
         {
-            var input = WorkshopModInput?.Trim() ?? string.Empty;
-            if (string.IsNullOrEmpty(input)) return;
-
-            // Parse Steam Workshop URL (?id=NNNN) or plain numeric ID
-            long workshopId = -1;
-            var urlMatch = Regex.Match(input, @"[?&]id=(\d+)");
-            if (urlMatch.Success)
-                long.TryParse(urlMatch.Groups[1].Value, out workshopId);
-            else
-                long.TryParse(input, out workshopId);
-
-            if (workshopId <= 0)
+            if (!DllSelected || !GetDllPathDir(out var dirPath))
             {
-                StatusText = "Invalid Workshop ID or URL. Ready.";
+                StatusText = "Please select the game DLL before adding mods. Ready.";
                 return;
             }
 
-            if (WorkshopMods.Any(m => m.WorkshopId == workshopId))
+            var dialog = new OpenFolderDialog
             {
-                StatusText = $"Mod {workshopId} is already in the list. Ready.";
-                return;
+                Title = "Select a mod folder or a folder containing mod folders..."
+            };
+
+            if (dialog.ShowDialog() != true) return;
+
+            var selectedFolder = dialog.FolderName;
+            var folderName = Path.GetFileName(selectedFolder);
+
+            // Single mod: folder name IS a numeric workshop ID
+            // Container: folder contains direct subfolders with numeric names
+            List<(long id, string path)> modsToAdd;
+
+            if (long.TryParse(folderName, out var singleId) && singleId > 0)
+            {
+                modsToAdd = new List<(long, string)> { (singleId, selectedFolder) };
+            }
+            else
+            {
+                modsToAdd = new List<(long, string)>();
+                foreach (var d in Directory.GetDirectories(selectedFolder))
+                    if (long.TryParse(Path.GetFileName(d), out var id) && id > 0)
+                        modsToAdd.Add((id, d));
+
+                if (modsToAdd.Count == 0)
+                {
+                    StatusText = "Folder is not a mod (no numeric name) and contains no numeric-named mod subfolders. Ready.";
+                    return;
+                }
             }
 
             MainWindowEnabled = false;
-            StatusText = $"Fetching info for workshop item {workshopId}...";
+            int added = 0, skipped = 0;
 
-            var mod = await _steam.GetWorkshopModInfo(workshopId);
-            mod.Status = "Not downloaded";
-            SetModDiskStatus(mod);
-            AddModToList(mod);
+            foreach (var (workshopId, sourcePath) in modsToAdd)
+            {
+                if (WorkshopMods.Any(m => m.WorkshopId == workshopId))
+                {
+                    skipped++;
+                    continue;
+                }
 
-            WorkshopModInput = string.Empty;
+                var targetDir = Path.Combine(dirPath, "steam_settings", "mods", workshopId.ToString());
+                StatusText = $"Copying mod {workshopId}...";
+                await Task.Run(() => CopyDirectory(sourcePath, targetDir)).ConfigureAwait(true);
+
+                // Try to read the name from local metadata (e.g. descriptor.mod for Paradox games).
+                // Fall back to Steam API if no local metadata is found.
+                WorkshopMod mod;
+                var localName = await Task.Run(() => TryReadModNameFromFolder(targetDir)).ConfigureAwait(true);
+                if (!string.IsNullOrEmpty(localName))
+                {
+                    mod = new WorkshopMod { WorkshopId = workshopId, Name = localName };
+                }
+                else
+                {
+                    StatusText = $"Fetching info for workshop item {workshopId}...";
+                    mod = await _steam.GetWorkshopModInfo(workshopId).ConfigureAwait(true);
+                }
+
+                mod.Downloaded = true;
+                mod.Status = "Ready";
+                mod.PrimaryFilename = await Task.Run(() => _goldberg.DetectPrimaryFilename(targetDir)).ConfigureAwait(true);
+                mod.SizeDisplay = await Task.Run(() => FormatFolderSize(targetDir)).ConfigureAwait(true);
+                AddModToList(mod);
+                added++;
+            }
+
             MainWindowEnabled = true;
-            StatusText = $"Added \"{mod.Name}\" ({workshopId}). Ready.";
+            StatusText = skipped > 0
+                ? $"Added {added} mod(s), skipped {skipped} already in list. Ready."
+                : $"Added {added} mod(s). Ready.";
+        }
+
+        private static void CopyDirectory(string source, string destination)
+        {
+            Directory.CreateDirectory(destination);
+            foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(source, file);
+                var dst = Path.Combine(destination, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                File.Copy(file, dst, overwrite: true);
+                File.SetAttributes(dst, FileAttributes.Normal);
+            }
         }
 
         /// <summary>
-        /// Checks whether a mod's files are already on disk and sets its Downloaded / Status / Enabled
-        /// properties accordingly. Has no effect if no DLL is selected.
+        /// Looks for a Paradox-style descriptor (.mod file) in <paramref name="folderPath"/> and
+        /// returns the value of the first <c>name = "..."</c> line, or null if none is found.
         /// </summary>
-        private void SetModDiskStatus(WorkshopMod mod)
+        private static string TryReadModNameFromFolder(string folderPath)
         {
-            if (!DllSelected || !GetDllPathDir(out var dirPath)) return;
+            // Prefer descriptor.mod; fall back to any *.mod in the root.
+            var candidates = new[] { Path.Combine(folderPath, "descriptor.mod") }
+                .Concat(Directory.GetFiles(folderPath, "*.mod", SearchOption.TopDirectoryOnly))
+                .Distinct();
+
+            foreach (var file in candidates)
+            {
+                if (!File.Exists(file)) continue;
+                foreach (var line in File.ReadAllLines(file))
+                {
+                    var m = Regex.Match(line, @"^\s*name\s*=\s*""([^""]+)""");
+                    if (m.Success) return m.Groups[1].Value;
+                }
+            }
+            return null;
+        }
+
+        private static string FormatFolderSize(string path)
+        {
+            if (!Directory.Exists(path)) return string.Empty;
+            var bytes = Directory.GetFiles(path, "*", SearchOption.AllDirectories)
+                .Sum(f => { try { return new FileInfo(f).Length; } catch { return 0L; } });
+            return FormatBytes(bytes);
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1_073_741_824) return $"{bytes / 1_073_741_824.0:F1} GB";
+            if (bytes >= 1_048_576)     return $"{bytes / 1_048_576.0:F1} MB";
+            if (bytes >= 1_024)         return $"{bytes / 1_024.0:F1} KB";
+            return $"{bytes} B";
+        }
+
+
+        private async Task RemoveWorkshopMod(WorkshopMod mod)
+        {
+            if (mod == null) return;
+
+            WorkshopMods.Remove(mod);
+
+            if (!GetDllPathDir(out var dirPath))
+            {
+                StatusText = $"Removed mod {mod.WorkshopId} from list. Ready.";
+                return;
+            }
+
             var activeDir   = Path.Combine(dirPath, "steam_settings", "mods",          mod.WorkshopId.ToString());
             var disabledDir = Path.Combine(dirPath, "steam_settings", "mods_disabled", mod.WorkshopId.ToString());
-            if (Directory.Exists(activeDir))
+
+            await Task.Run(() =>
             {
-                mod.Downloaded = true;
-                mod.Status     = "Ready";
-            }
-            else if (Directory.Exists(disabledDir))
-            {
-                mod.Downloaded = true;
-                mod.Enabled    = false;
-                mod.Status     = "Disabled";
-            }
+                if (Directory.Exists(activeDir))   DeleteDirectory(activeDir);
+                if (Directory.Exists(disabledDir)) DeleteDirectory(disabledDir);
+            }).ConfigureAwait(true);
+
+            StatusText = $"Removed mod {mod.WorkshopId} and deleted its files. Ready.";
         }
 
-
-        private void RemoveWorkshopMod(WorkshopMod mod)
+        private static void DeleteDirectory(string path)
         {
-            if (mod == null) return;
-            WorkshopMods.Remove(mod);
-            StatusText = $"Removed mod {mod.WorkshopId} from list. Files on disk are unchanged. Ready.";
-        }
-
-        private async Task DownloadMod(WorkshopMod mod)
-        {
-            if (mod == null) return;
-            if (AppId <= 0)
-            {
-                StatusText = "Please set the game AppID before downloading a mod. Ready.";
-                return;
-            }
-            if (!DllSelected || !GetDllPathDir(out var dirPath))
-            {
-                StatusText = "Please select the game DLL before downloading a mod. Ready.";
-                return;
-            }
-
-            MainWindowEnabled = false;
-            mod.Status = "Preparing SteamCMD...";
-
-            var steamCmdExe = await _goldberg.EnsureSteamCmd(SteamCmdPath, s =>
-            {
-                InvokeOnMainThread(() => { StatusText = s; mod.Status = s; });
-            });
-
-            if (steamCmdExe == null)
-            {
-                StatusText = "Could not obtain SteamCMD. Ready.";
-                mod.Status = "Error";
-                MainWindowEnabled = true;
-                return;
-            }
-
-            mod.Status = "Downloading...";
-            var success = await _goldberg.DownloadWorkshopMod(dirPath, AppId, mod, steamCmdExe, s =>
-            {
-                InvokeOnMainThread(() => { StatusText = s; mod.Status = s; });
-            });
-
-            mod.Downloaded = success;
-            mod.Status     = success ? "Ready" : "Error";
-            MainWindowEnabled = true;
-            StatusText = success
-                ? $"Mod \"{mod.Name}\" downloaded successfully. Ready."
-                : $"Failed to download mod {mod.WorkshopId}. Check the log. Ready.";
+            foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(path, recursive: true);
         }
 
         private void MoveModUp(WorkshopMod mod)
@@ -1131,64 +1195,5 @@ namespace GoldbergGUI.Core.ViewModels
             if (idx >= 0 && idx < _workshopMods.Count - 1) _workshopMods.Move(idx, idx + 1);
         }
 
-        private async Task DownloadAllMods()
-        {
-            if (_workshopMods == null || _workshopMods.Count == 0) return;
-            if (AppId <= 0)
-            {
-                StatusText = "Please set the game AppID before downloading mods. Ready.";
-                return;
-            }
-            if (!DllSelected || !GetDllPathDir(out var dirPath))
-            {
-                StatusText = "Please select the game DLL before downloading mods. Ready.";
-                return;
-            }
-
-            MainWindowEnabled = false;
-
-            var steamCmdExe = await _goldberg.EnsureSteamCmd(SteamCmdPath, s =>
-            {
-                InvokeOnMainThread(() => StatusText = s);
-            });
-
-            if (steamCmdExe == null)
-            {
-                StatusText = "Could not obtain SteamCMD. Ready.";
-                MainWindowEnabled = true;
-                return;
-            }
-
-            var mods = _workshopMods.ToList();
-            int downloaded = 0, failed = 0;
-            foreach (var mod in mods)
-            {
-                mod.Status = "Downloading...";
-                StatusText  = $"Downloading \"{mod.Name}\" ({downloaded + failed + 1}/{mods.Count})...";
-                var success = await _goldberg.DownloadWorkshopMod(dirPath, AppId, mod, steamCmdExe, s =>
-                {
-                    InvokeOnMainThread(() => { StatusText = s; mod.Status = s; });
-                });
-                mod.Downloaded = success;
-                mod.Status     = success ? "Ready" : "Error";
-                if (success) downloaded++; else failed++;
-            }
-
-            MainWindowEnabled = true;
-            StatusText = failed == 0
-                ? $"Downloaded {downloaded} mod{(downloaded == 1 ? "" : "s")} successfully. Ready."
-                : $"Downloaded {downloaded}, failed {failed}. Check the log. Ready.";
-        }
-
-        private void BrowseSteamCmd()
-        {
-            var dialog = new OpenFileDialog
-            {
-                Filter = "steamcmd.exe|steamcmd.exe|All files (*.*)|*.*",
-                Title  = "Select steamcmd.exe..."
-            };
-            if (dialog.ShowDialog() == true)
-                SteamCmdPath = dialog.FileName;
-        }
     }
 }

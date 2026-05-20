@@ -7,10 +7,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -37,9 +37,7 @@ namespace GoldbergGUI.Core.Services
         bool SteamclientModeApplied(string path);
         string GetSteamclientExeName(string path);
         List<string> Languages();
-        Task<bool> DownloadWorkshopMod(string gamePath, int appId, WorkshopMod mod,
-            string steamCmdExe, Action<string> statusCallback);
-        Task<string> EnsureSteamCmd(string preferredPath, Action<string> statusCallback);
+        string DetectPrimaryFilename(string modFolderPath);
     }
 
     // ReSharper disable once UnusedType.Global
@@ -79,8 +77,7 @@ namespace GoldbergGUI.Core.Services
         }
 
         // Compiled once and reused for every Read() call
-        private static readonly Regex DlcKvRegex   = new Regex(@"(?<id>.*) *= *(?<n>.*)");
-        private static readonly Regex AppPathRegex  = new Regex(@"(?<id>.*) *= *(?<appPath>.*)");
+        private static readonly Regex DlcKvRegex = new Regex(@"(?<id>.*) *= *(?<n>.*)");
 
         // ReSharper disable StringLiteralTypo
         private readonly List<string> _interfaceNames = new List<string>
@@ -133,7 +130,6 @@ namespace GoldbergGUI.Core.Services
             var language         = DefaultLanguage;
             var customBroadcastIps = new List<string>();
             var useSteamclientMode      = false;
-            var steamCmdPath            = string.Empty;
 
             if (File.Exists(_globalUserIniPath))
             {
@@ -156,9 +152,6 @@ namespace GoldbergGUI.Core.Services
                         if (general.TryGetValue("use_steamclient_mode", out var scMode))
                             bool.TryParse(scMode.Trim(), out useSteamclientMode);
 
-                        if (general.TryGetValue("steamcmd_path", out var scp) && !string.IsNullOrWhiteSpace(scp))
-                            steamCmdPath = scp.Trim();
-
                     }
 
                     if (ini.TryGetValue("user::saves", out var saves) &&
@@ -179,7 +172,6 @@ namespace GoldbergGUI.Core.Services
                 Language                = language,
                 CustomBroadcastIps      = customBroadcastIps,
                 UseSteamclientMode      = useSteamclientMode,
-                SteamCmdPath            = steamCmdPath,
             };
         }
 
@@ -201,8 +193,6 @@ namespace GoldbergGUI.Core.Services
             sb.AppendLine($"account_steamid={userSteamId}");
             sb.AppendLine($"language={language}");
             sb.AppendLine($"use_steamclient_mode={c.UseSteamclientMode.ToString().ToLower()}");
-            if (!string.IsNullOrEmpty(c.SteamCmdPath))
-                sb.AppendLine($"steamcmd_path={c.SteamCmdPath}");
             sb.AppendLine();
 
             if (c.CustomBroadcastIps?.Count > 0)
@@ -323,10 +313,10 @@ namespace GoldbergGUI.Core.Services
                     var appPathLines = await File.ReadAllLinesAsync(appPathTxt).ConfigureAwait(false);
                     foreach (var line in appPathLines)
                     {
-                        var m = AppPathRegex.Match(line);
+                        var m = DlcKvRegex.Match(line);
                         if (!m.Success) continue;
                         var i = dlcList.FindIndex(x => x.AppId == Convert.ToInt32(m.Groups["id"].Value));
-                        if (i >= 0) dlcList[i].AppPath = m.Groups["appPath"].Value;
+                        if (i >= 0) dlcList[i].AppPath = m.Groups["n"].Value;
                     }
                 }
             }
@@ -375,25 +365,34 @@ namespace GoldbergGUI.Core.Services
                 {
                     foreach (var line in File.ReadAllLines(modsListPath))
                     {
-                        // Format: workshopid=Name=enabled(1/0)
+                        // Format: workshopid=Name=enabled(1/0)=primaryFilename
                         var parts = line.Split('=');
                         if (parts.Length < 2) continue;
                         if (!long.TryParse(parts[0].Trim(), out var wid)) continue;
-                        var modName = parts.Length >= 2 ? parts[1].Trim() : $"Mod {wid}";
-                        var enabled = parts.Length < 3 || parts[2].Trim() != "0";
+                        var modName         = parts[1].Trim();
+                        var enabled         = parts.Length < 3 || parts[2].Trim() != "0";
+                        var primaryFilename = parts.Length >= 4 ? parts[3].Trim() : string.Empty;
                         var activeDir   = Path.Combine(modsDir, wid.ToString());
                         var disabledDir = Path.Combine(modsDisabledDir, wid.ToString());
                         var downloaded  = Directory.Exists(activeDir) || Directory.Exists(disabledDir);
                         var status      = Directory.Exists(activeDir)   ? "Ready"
                                         : Directory.Exists(disabledDir) ? "Disabled"
                                         : "Not downloaded";
+                        // If primaryFilename wasn't persisted, detect it from the folder
+                        if (string.IsNullOrEmpty(primaryFilename))
+                        {
+                            var folder = Directory.Exists(activeDir) ? activeDir
+                                       : Directory.Exists(disabledDir) ? disabledDir : null;
+                            if (folder != null) primaryFilename = DetectPrimaryFilename(folder);
+                        }
                         modList.Add(new WorkshopMod
                         {
-                            WorkshopId = wid,
-                            Name       = string.IsNullOrEmpty(modName) ? $"Mod {wid}" : modName,
-                            Enabled    = enabled,
-                            Downloaded = downloaded,
-                            Status     = status,
+                            WorkshopId      = wid,
+                            Name            = string.IsNullOrEmpty(modName) ? $"Mod {wid}" : modName,
+                            Enabled         = enabled,
+                            Downloaded      = downloaded,
+                            Status          = status,
+                            PrimaryFilename = primaryFilename,
                         });
                     }
                 }).ConfigureAwait(false);
@@ -407,7 +406,7 @@ namespace GoldbergGUI.Core.Services
                         foreach (var subDir in Directory.GetDirectories(modsDir))
                         {
                             if (!long.TryParse(Path.GetFileName(subDir), out var wid)) continue;
-                            modList.Add(new WorkshopMod { WorkshopId = wid, Name = $"Mod {wid}", Enabled = true, Downloaded = true, Status = "Ready" });
+                            modList.Add(new WorkshopMod { WorkshopId = wid, Name = $"Mod {wid}", Enabled = true, Downloaded = true, Status = "Ready", PrimaryFilename = DetectPrimaryFilename(subDir) });
                         }
 
                     if (Directory.Exists(modsDisabledDir))
@@ -415,7 +414,7 @@ namespace GoldbergGUI.Core.Services
                         {
                             if (!long.TryParse(Path.GetFileName(subDir), out var wid)) continue;
                             if (modList.Any(m => m.WorkshopId == wid)) continue; // already seen
-                            modList.Add(new WorkshopMod { WorkshopId = wid, Name = $"Mod {wid}", Enabled = false, Downloaded = true, Status = "Disabled" });
+                            modList.Add(new WorkshopMod { WorkshopId = wid, Name = $"Mod {wid}", Enabled = false, Downloaded = true, Status = "Disabled", PrimaryFilename = DetectPrimaryFilename(subDir) });
                         }
                 }).ConfigureAwait(false);
             }
@@ -634,15 +633,149 @@ namespace GoldbergGUI.Core.Services
                     }
                 }).ConfigureAwait(false);
 
-                // Write mods_list.txt index (workshopid=Name=enabled)
+                // Write mods_list.txt index (workshopid=Name=enabled=primaryFilename)
                 var sb2 = new StringBuilder();
                 foreach (var mod in c.WorkshopMods)
-                    sb2.AppendLine($"{mod.WorkshopId}={mod.Name}={(mod.Enabled ? "1" : "0")}");
+                    sb2.AppendLine($"{mod.WorkshopId}={mod.Name}={(mod.Enabled ? "1" : "0")}={mod.PrimaryFilename}");
                 await File.WriteAllTextAsync(Path.Combine(modsDir, "mods_list.txt"), sb2.ToString())
                     .ConfigureAwait(false);
 
+                // Write mods.json for the emulator — only enabled mods (files are in mods/, not mods_disabled/)
+                var modsJson = new Dictionary<string, object>();
+                foreach (var mod in c.WorkshopMods.Where(m => m.Enabled))
+                {
+                    var entry = new Dictionary<string, object> { ["title"] = mod.Name };
+                    if (!string.IsNullOrEmpty(mod.PrimaryFilename))
+                        entry["primary_filename"] = mod.PrimaryFilename;
+                    modsJson[mod.WorkshopId.ToString()] = entry;
+                }
+                var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+                await File.WriteAllTextAsync(
+                    Path.Combine(settingsDir, "mods.json"),
+                    JsonSerializer.Serialize(modsJson, jsonOptions)).ConfigureAwait(false);
+
                 _log.Info($"Saved {c.WorkshopMods.Count} workshop mod(s).");
             }
+
+            // For Paradox games, sync .mod files into the game data documents folder so
+            // the Paradox Launcher can see the mods (it doesn't read gbe_fork's mods.json).
+            await SyncParadoxModFiles(path, settingsDir, c.WorkshopMods ?? new List<WorkshopMod>())
+                .ConfigureAwait(false);
+        }
+
+        // -----------------------------------------------------------------------
+        // Paradox Launcher .mod file sync
+        // -----------------------------------------------------------------------
+        private async Task SyncParadoxModFiles(string gamePath, string settingsDir, List<WorkshopMod> mods)
+        {
+            var launcherSettingsPath = Path.Combine(gamePath, "launcher-settings.json");
+            if (!File.Exists(launcherSettingsPath)) return;
+
+            string gameDataPath;
+            try
+            {
+                var json = await File.ReadAllTextAsync(launcherSettingsPath).ConfigureAwait(false);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("gameDataPath", out var gdp)) return;
+                var raw = gdp.GetString();
+                if (string.IsNullOrEmpty(raw)) return;
+                gameDataPath = raw.Replace("%USER_DOCUMENTS%",
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"Could not read launcher-settings.json: {e.Message}");
+                return;
+            }
+
+            var paradoxModFolder = Path.Combine(gameDataPath, "mod");
+            EnsureDirectory(paradoxModFolder);
+
+            var modsDir = Path.Combine(settingsDir, "mods");
+
+            foreach (var mod in mods)
+            {
+                var docModFile = Path.Combine(paradoxModFolder, $"{mod.WorkshopId}.mod");
+
+                if (!mod.Enabled)
+                {
+                    if (File.Exists(docModFile)) File.Delete(docModFile);
+                    continue;
+                }
+
+                var sourceModDir = Path.Combine(modsDir, mod.WorkshopId.ToString());
+                if (!Directory.Exists(sourceModDir)) continue;
+
+                // Read the descriptor, strip any existing path= line, then set the correct absolute path.
+                var descriptorPath = Path.Combine(sourceModDir, "descriptor.mod");
+                if (!File.Exists(descriptorPath))
+                    descriptorPath = Directory
+                        .GetFiles(sourceModDir, "*.mod", SearchOption.TopDirectoryOnly)
+                        .FirstOrDefault();
+
+                string content;
+                var absPath = sourceModDir.Replace('\\', '/');
+                if (descriptorPath != null && File.Exists(descriptorPath))
+                {
+                    var lines = (await File.ReadAllLinesAsync(descriptorPath).ConfigureAwait(false))
+                        .Where(l => !Regex.IsMatch(l, @"^\s*path\s*="))
+                        .ToList();
+                    lines.Add($"path=\"{absPath}\"");
+                    content = string.Join("\n", lines) + "\n";
+                }
+                else
+                {
+                    content = $"name=\"{mod.Name}\"\npath=\"{absPath}\"\nremote_file_id=\"{mod.WorkshopId}\"\n";
+                }
+
+                await File.WriteAllTextAsync(docModFile, content).ConfigureAwait(false);
+                _log.Info($"Wrote Paradox .mod file for workshop item {mod.WorkshopId} → {docModFile}");
+            }
+
+            // Update dlc_load.json so the game loads the enabled mods on launch.
+            // This file is read by hoi4.exe itself; the Paradox Launcher rewrites it
+            // from its playset DB, so direct launch (hoi4.exe) is needed for this to stick.
+            var dlcLoadPath = Path.Combine(gameDataPath, "dlc_load.json");
+            await UpdateDlcLoadJson(dlcLoadPath, mods).ConfigureAwait(false);
+        }
+
+        private async Task UpdateDlcLoadJson(string dlcLoadPath, List<WorkshopMod> mods)
+        {
+            // Preserve any existing non-workshop entries (e.g. manually added local mods).
+            var existingEntries = new List<string>();
+            if (File.Exists(dlcLoadPath))
+            {
+                try
+                {
+                    var raw = await File.ReadAllTextAsync(dlcLoadPath).ConfigureAwait(false);
+                    using var doc = JsonDocument.Parse(raw);
+                    if (doc.RootElement.TryGetProperty("enabled_mods", out var arr))
+                        foreach (var item in arr.EnumerateArray())
+                        {
+                            var val = item.GetString();
+                            if (val != null) existingEntries.Add(val);
+                        }
+                }
+                catch { /* corrupt or missing — start fresh */ }
+            }
+
+            // Remove any entries belonging to workshop mods we manage (we'll re-add enabled ones).
+            var ourIds = new HashSet<string>(mods.Select(m => m.WorkshopId.ToString()));
+            existingEntries.RemoveAll(e =>
+            {
+                var stem = Path.GetFileNameWithoutExtension(e);
+                return long.TryParse(stem, out _) && ourIds.Contains(stem);
+            });
+
+            // Re-add currently enabled mods.
+            foreach (var mod in mods.Where(m => m.Enabled))
+                existingEntries.Add($"mod/{mod.WorkshopId}.mod");
+
+            var json = JsonSerializer.Serialize(
+                new Dictionary<string, object> { ["enabled_mods"] = existingEntries },
+                new JsonSerializerOptions { WriteIndented = false });
+            await File.WriteAllTextAsync(dlcLoadPath, json).ConfigureAwait(false);
+            _log.Info($"Updated dlc_load.json with {existingEntries.Count} mod(s).");
         }
 
         // -----------------------------------------------------------------------
@@ -1233,132 +1366,18 @@ namespace GoldbergGUI.Core.Services
         private static string FirstExisting(params string[] paths) =>
             paths.FirstOrDefault(File.Exists);
 
-        // -----------------------------------------------------------------------
-        // Workshop mod download via SteamCMD
-        // -----------------------------------------------------------------------
-        public async Task<bool> DownloadWorkshopMod(string gamePath, int appId, WorkshopMod mod,
-            string steamCmdExe, Action<string> statusCallback)
+        /// <summary>
+        /// Detects the primary filename of a workshop mod folder.
+        /// Prefers descriptor.mod (Paradox games), then any *.mod file in the root.
+        /// </summary>
+        public string DetectPrimaryFilename(string modFolderPath)
         {
-            if (!File.Exists(steamCmdExe))
-            {
-                _log.Error($"steamcmd.exe not found at: {steamCmdExe}");
-                return false;
-            }
-
-            var workshopId  = mod.WorkshopId;
-            var steamCmdDir = Path.GetDirectoryName(steamCmdExe)!;
-
-            var args = $"+login anonymous +workshop_download_item {appId} {workshopId} +quit";
-
-            statusCallback?.Invoke($"Downloading mod {workshopId} via SteamCMD...");
-            _log.Info($"Running steamcmd: {steamCmdExe} {args}");
-
-            var psi = new ProcessStartInfo
-            {
-                FileName               = steamCmdExe,
-                Arguments              = args,
-                UseShellExecute        = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true
-            };
-
-            using var process = new Process { StartInfo = psi };
-            process.Start();
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            await Task.WhenAll(Task.Run(() => process.WaitForExit()), stdout, stderr).ConfigureAwait(false);
-
-            if (process.ExitCode != 0)
-            {
-                _log.Error($"SteamCMD exited with code {process.ExitCode}. Stderr: {stderr.Result}");
-                return false;
-            }
-
-            // SteamCMD places files at: <steamcmd_dir>/steamapps/workshop/content/<appid>/<workshopid>/
-            var downloadedDir = Path.Combine(
-                steamCmdDir, "steamapps", "workshop", "content",
-                appId.ToString(), workshopId.ToString());
-
-            if (!Directory.Exists(downloadedDir))
-            {
-                _log.Error($"SteamCMD finished but download dir not found: {downloadedDir}");
-                return false;
-            }
-
-            var targetDir = Path.Combine(gamePath, "steam_settings", "mods", workshopId.ToString());
-            EnsureDirectory(targetDir);
-
-            await Task.Run(() =>
-            {
-                foreach (var srcFile in Directory.GetFiles(downloadedDir, "*", SearchOption.AllDirectories))
-                {
-                    var relative = Path.GetRelativePath(downloadedDir, srcFile);
-                    var dst      = Path.Combine(targetDir, relative);
-                    EnsureDirectory(Path.GetDirectoryName(dst)!);
-                    File.Copy(srcFile, dst, overwrite: true);
-                    // SteamCMD marks downloaded files as read-only; clear that so
-                    // future overwrites and directory deletions work without errors.
-                    File.SetAttributes(dst, FileAttributes.Normal);
-                }
-            }).ConfigureAwait(false);
-
-            statusCallback?.Invoke($"Mod {workshopId} downloaded successfully.");
-            _log.Info($"Workshop mod {workshopId} downloaded to {targetDir}.");
-            return true;
+            if (!Directory.Exists(modFolderPath)) return string.Empty;
+            if (File.Exists(Path.Combine(modFolderPath, "descriptor.mod"))) return "descriptor.mod";
+            var modFile = Directory.GetFiles(modFolderPath, "*.mod", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault();
+            return modFile != null ? Path.GetFileName(modFile) : string.Empty;
         }
 
-        private const string SteamCmdDownloadUrl =
-            "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
-
-        public async Task<string> EnsureSteamCmd(string preferredPath, Action<string> statusCallback)
-        {
-            // Use configured path if valid
-            if (!string.IsNullOrEmpty(preferredPath) && File.Exists(preferredPath))
-                return preferredPath;
-
-            // Auto-download location: <app_dir>/steamcmd/steamcmd.exe
-            var steamCmdDir = Path.Combine(Directory.GetCurrentDirectory(), "steamcmd");
-            var steamCmdExe = Path.Combine(steamCmdDir, "steamcmd.exe");
-
-            if (File.Exists(steamCmdExe))
-                return steamCmdExe;
-
-            statusCallback?.Invoke("Downloading SteamCMD...");
-            _log.Info("SteamCMD not found — downloading from Valve...");
-
-            EnsureDirectory(steamCmdDir);
-            var zipPath = Path.Combine(steamCmdDir, "steamcmd.zip");
-
-            var data = await _httpClient.GetByteArrayAsync(SteamCmdDownloadUrl).ConfigureAwait(false);
-            await File.WriteAllBytesAsync(zipPath, data).ConfigureAwait(false);
-
-            await Task.Run(() =>
-                ZipFile.ExtractToDirectory(zipPath, steamCmdDir, overwriteFiles: true)
-            ).ConfigureAwait(false);
-
-            File.Delete(zipPath);
-
-            if (!File.Exists(steamCmdExe))
-            {
-                _log.Error("steamcmd.exe not found after extraction.");
-                return null;
-            }
-
-            // Run once to let SteamCMD self-update
-            statusCallback?.Invoke("Initializing SteamCMD (first run)...");
-            var psi = new ProcessStartInfo
-            {
-                FileName        = steamCmdExe,
-                Arguments       = "+quit",
-                UseShellExecute = false,
-                CreateNoWindow  = true
-            };
-            using var p = Process.Start(psi);
-            await Task.Run(() => p?.WaitForExit()).ConfigureAwait(false);
-
-            _log.Info($"SteamCMD ready at {steamCmdExe}.");
-            return steamCmdExe;
-        }
     }
 }
