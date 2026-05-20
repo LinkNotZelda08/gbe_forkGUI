@@ -5,7 +5,7 @@ Fork of Jeddunk's [GoldbergGUI](https://forgejo.jeddunk.xyz/jeddunk/GoldbergGUI)
 ## Installation
 
 * Install the latest .NET Core Runtime by clicking
-  [here](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-10.0.5-windows-x64-installer)
+  [here](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/sdk-10.0.300-windows-x64-installer)
 * Download the latest release and extract it into any folder (e.g. %USERPROFILE%\Desktop\gbe_forkGUI).
 
 ## Usage
