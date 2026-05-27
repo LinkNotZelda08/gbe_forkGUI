@@ -116,34 +116,41 @@ namespace GoldbergGUI.Core.Services
             var countAsync = await _db.Table<SteamApp>().CountAsync().ConfigureAwait(false);
             if (DateTime.Now.Subtract(File.GetLastWriteTimeUtc(Database)).TotalDays >= 1 || countAsync == 0)
             {
-                foreach (var (appType, steamCache) in _caches)
+                try
                 {
-                    _log.Info($"Updating cache ({appType})...");
-                    bool haveMoreResults;
-                    long lastAppId = 0;
-                    var cacheRaw = new HashSet<SteamApp>();
-                    do
+                    foreach (var (appType, steamCache) in _caches)
                     {
-                        var response = lastAppId > 0
-                            ? await _httpClient.GetAsync($"{steamCache.SteamUri}&last_appid={lastAppId}")
-                                .ConfigureAwait(false)
-                            : await _httpClient.GetAsync(steamCache.SteamUri).ConfigureAwait(false);
-                        var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                        var steamApps = DeserializeSteamApps(steamCache.ApiVersion, responseBody);
-                        foreach (var appListApp in steamApps.AppList.Apps) cacheRaw.Add(appListApp);
-                        haveMoreResults = steamApps.AppList.HaveMoreResults;
-                        lastAppId = steamApps.AppList.LastAppid;
-                    } while (haveMoreResults);
+                        _log.Info($"Updating cache ({appType})...");
+                        bool haveMoreResults;
+                        long lastAppId = 0;
+                        var cacheRaw = new HashSet<SteamApp>();
+                        do
+                        {
+                            var response = lastAppId > 0
+                                ? await _httpClient.GetAsync($"{steamCache.SteamUri}&last_appid={lastAppId}")
+                                    .ConfigureAwait(false)
+                                : await _httpClient.GetAsync(steamCache.SteamUri).ConfigureAwait(false);
+                            var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            var steamApps = DeserializeSteamApps(steamCache.ApiVersion, responseBody);
+                            foreach (var appListApp in steamApps.AppList.Apps) cacheRaw.Add(appListApp);
+                            haveMoreResults = steamApps.AppList.HaveMoreResults;
+                            lastAppId = steamApps.AppList.LastAppid;
+                        } while (haveMoreResults);
 
-                    var cache = new HashSet<SteamApp>();
-                    foreach (var steamApp in cacheRaw)
-                    {
-                        steamApp.AppType = steamCache.SteamAppType;
-                        steamApp.ComparableName = PrepareStringToCompare(steamApp.Name);
-                        cache.Add(steamApp);
+                        var cache = new HashSet<SteamApp>();
+                        foreach (var steamApp in cacheRaw)
+                        {
+                            steamApp.AppType = steamCache.SteamAppType;
+                            steamApp.ComparableName = PrepareStringToCompare(steamApp.Name);
+                            cache.Add(steamApp);
+                        }
+
+                        await _db.InsertAllAsync(cache, "OR IGNORE").ConfigureAwait(false);
                     }
-
-                    await _db.InsertAllAsync(cache, "OR IGNORE").ConfigureAwait(false);
+                }
+                catch (Exception e)
+                {
+                    _log.Error($"Failed to update Steam app cache (offline?): {e.Message}");
                 }
             }
         }

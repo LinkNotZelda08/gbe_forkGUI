@@ -91,7 +91,8 @@ namespace GoldbergGUI.Core.Services
             "STEAMAPPLIST_INTERFACE_VERSION", "STEAMMUSIC_INTERFACE_VERSION",
             "STEAMMUSICREMOTE_INTERFACE_VERSION", "STEAMHTMLSURFACE_INTERFACE_VERSION_",
             "STEAMINVENTORY_INTERFACE_V", "SteamController", "SteamMasterServerUpdater",
-            "STEAMVIDEO_INTERFACE_V"
+            "STEAMVIDEO_INTERFACE_V", "STEAMPARENTALSETTINGS_INTERFACE_VERSION",
+            "STEAMREMOTEPLAY_INTERFACE_VERSION"
         };
         // ReSharper restore StringLiteralTypo
 
@@ -1033,15 +1034,14 @@ namespace GoldbergGUI.Core.Services
         {
             _log.Debug($"GenerateInterfacesFile {filePath}");
             var result     = new HashSet<string>();
-            var dllContent = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
+            var dllContent = await File.ReadAllTextAsync(filePath, Encoding.Latin1).ConfigureAwait(false);
 
             foreach (var name in _interfaceNames)
-            {
                 FindInterfaces(ref result, dllContent, new Regex($"{name}\\d{{3}}"));
-                // SteamController has a special versioned and non-versioned variant
-                if (!FindInterfaces(ref result, dllContent, new Regex(@"STEAMCONTROLLER_INTERFACE_VERSION\d{3}")))
-                    FindInterfaces(ref result, dllContent, new Regex("STEAMCONTROLLER_INTERFACE_VERSION"));
-            }
+
+            // SteamController has a special versioned and non-versioned variant
+            if (!FindInterfaces(ref result, dllContent, new Regex(@"STEAMCONTROLLER_INTERFACE_VERSION\d{3}")))
+                FindInterfaces(ref result, dllContent, new Regex("STEAMCONTROLLER_INTERFACE_VERSION"));
 
             var dirPath = Path.GetDirectoryName(filePath);
             if (dirPath == null) return;

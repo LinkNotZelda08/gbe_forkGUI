@@ -135,11 +135,12 @@ namespace GoldbergGUI.Core.ViewModels
                 catch (Exception e)
                 {
                     _log.Error(e.Message);
-                    throw;
                 }
-
-                MainWindowEnabled = true;
-                StatusText = "Ready.";
+                finally
+                {
+                    MainWindowEnabled = true;
+                    StatusText = "Ready.";
+                }
             });
         }
 
@@ -513,15 +514,7 @@ namespace GoldbergGUI.Core.ViewModels
             WorkshopMods = new ObservableCollection<WorkshopMod>(_workshopMods);
         }
 
-        /// <summary>True when the steam_interfaces.txt has NOT yet been generated (button should be enabled).</summary>
-        public bool SteamInterfacesTxtExists
-        {
-            get
-            {
-                var dllPathDirExists = GetDllPathDir(out var dirPath);
-                return dllPathDirExists && !File.Exists(Path.Combine(dirPath, "steam_interfaces.txt"));
-            }
-        }
+        public bool SteamInterfacesTxtExists => DllSelected;
 
         /// <summary>True once the user has selected a real DLL path.</summary>
         public bool DllSelected
