@@ -5,6 +5,7 @@
                   xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
                   xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
                   xmlns:viewmodel="clr-namespace:GoldbergGUI.Core.ViewModels;assembly=GoldbergGUI.Core"
+                  xmlns:utils="clr-namespace:GoldbergGUI.Core.Utils;assembly=GoldbergGUI.Core"
                   mc:Ignorable="d"
                   d:DesignHeight="500" d:DesignWidth="400" d:DataContext="{d:DesignInstance Type=viewmodel:MainViewModel }"
                   Background="{DynamicResource BackgroundBrush}">
@@ -227,6 +228,183 @@
                                     <TextBlock Grid.Row="2" Margin="0,4,0,0" TextWrapping="Wrap" Foreground="{DynamicResource ForegroundBrush}">
                                         Active mods live in <Run FontStyle="Italic">steam_settings/mods/</Run>. Uncheck a mod to disable it without deleting files.
                                     </TextBlock>
+                                </Grid>
+                            </TabItem>
+                            <TabItem Header="Controller" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
+                                <Grid Margin="0,10,0,10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- ── Fetch toolbar ─────────────────────────────────────── -->
+                                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Row 0: auto-fetch -->
+                                        <Button Grid.Row="0" Grid.Column="0"
+                                                Content="Fetch from SteamDB"
+                                                Width="130" Margin="0,0,8,4"
+                                                Command="{Binding FetchControllerConfigCommand}"
+                                                ToolTip="Auto-downloads the Xbox controller VDF for this AppID from Steam, parses it, and fills the table below."/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2"
+                                                   VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ForegroundBrush}" Margin="0,0,0,4"
+                                                   FontStyle="Italic" Opacity="0.7"
+                                                   Text="Downloads the Xbox 360/One controller VDF from Steam and auto-populates the action sets below. Requires a valid AppID."/>
+
+                                        <!-- Row 1: manual file ID fallback -->
+                                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                                   Text="Manual file ID:"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource ForegroundBrush}"
+                                                   Margin="0,0,6,0"/>
+                                        <TextBox Grid.Row="1" Grid.Column="1"
+                                                 Text="{Binding ControllerVdfFileId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 VerticalAlignment="Center" Margin="0,0,6,0"
+                                                 ToolTip="Published-file ID from steamdb.info/app/{AppId}/config/ → steamcontrollerconfigdetails"/>
+                                        <Button Grid.Row="1" Grid.Column="2"
+                                                Content="Fetch"
+                                                Width="60"
+                                                Command="{Binding FetchControllerByFileIdCommand}"
+                                                ToolTip="Download and parse the VDF file with this ID"/>
+
+                                        <!-- Row 2: template info banner (visible only when a template is detected) -->
+                                        <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                                                Visibility="{Binding ControllerTemplateVisible, Converter={StaticResource B2V}}"
+                                                BorderBrush="{DynamicResource ForegroundBrush}" BorderThickness="1"
+                                                CornerRadius="3" Padding="7,5" Margin="0,6,0,0">
+                                            <TextBlock TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource ForegroundBrush}">
+                                                <Run Text="ℹ  Template detected: " FontWeight="Bold"/>
+                                                <Run Text="{Binding ControllerTemplateName, Mode=OneWay}" FontWeight="Bold"/>
+                                                <Run Text=" — XInput / generic gamepad support works natively for this game. Custom action sets are only needed when the game uses Steam Input's action-set API." FontStyle="Italic"/>
+                                            </TextBlock>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- ── Action sets + bindings ────────────────────────────── -->
+                                    <Grid Grid.Row="1">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="180"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Action Sets panel -->
+                                        <Grid Grid.Column="0" Margin="0,0,6,0">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="*"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Text="Action Sets" FontWeight="Bold" Margin="0,0,0,4"
+                                                       Foreground="{DynamicResource ForegroundBrush}"/>
+                                            <DataGrid Grid.Row="1"
+                                                      ItemsSource="{Binding ControllerActionSets}"
+                                                      SelectedItem="{Binding SelectedControllerActionSet, Mode=TwoWay}"
+                                                      SelectionMode="Single"
+                                                      SelectionUnit="FullRow"
+                                                      HeadersVisibility="Column"
+                                                      AutoGenerateColumns="False"
+                                                      CanUserAddRows="False"
+                                                      CanUserDeleteRows="False"
+                                                      CanUserResizeColumns="False">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Name"
+                                                                        Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                                        Width="*"/>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,5,0,0">
+                                                <Button Content="Add" Width="50" Margin="0,0,4,0"
+                                                        Command="{Binding AddControllerActionSetCommand}"/>
+                                                <Button Content="Remove" Width="60"
+                                                        Command="{Binding RemoveControllerActionSetCommand}"/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Bindings panel -->
+                                        <Grid Grid.Column="1">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="*"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" FontWeight="Bold" Margin="0,0,0,4"
+                                                       Foreground="{DynamicResource ForegroundBrush}">
+                                                <Run Text="Bindings"/><Run Text="{Binding SelectedControllerActionSet.Name, StringFormat=' — {0}', TargetNullValue=''}"/>
+                                            </TextBlock>
+                                            <DataGrid Grid.Row="1"
+                                                      ItemsSource="{Binding SelectedControllerActionSet.Bindings}"
+                                                      SelectionMode="Single"
+                                                      SelectionUnit="FullRow"
+                                                      HeadersVisibility="Column"
+                                                      AutoGenerateColumns="False"
+                                                      CanUserAddRows="False"
+                                                      CanUserDeleteRows="False"
+                                                      CanUserResizeColumns="True">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Action"
+                                                                        Binding="{Binding ActionName, UpdateSourceTrigger=PropertyChanged}"
+                                                                        Width="*"/>
+                                                    <!-- Binding — friendly-name ComboBox with free-text fallback -->
+                                                    <DataGridTemplateColumn Header="Binding" Width="*">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding BindingFriendly, Mode=OneWay}"
+                                                                           VerticalAlignment="Center" Padding="4,0"
+                                                                           ToolTip="Double-click to pick from the list. Use 🎮 to detect a controller input."/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                        <DataGridTemplateColumn.CellEditingTemplate>
+                                                            <DataTemplate>
+                                                                <ComboBox ItemsSource="{x:Static utils:ControllerBindingMap.AllOptions}"
+                                                                          DisplayMemberPath="FriendlyName"
+                                                                          SelectedValuePath="FriendlyName"
+                                                                          SelectedValue="{Binding BindingFriendly, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                          MaxDropDownHeight="200"/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellEditingTemplate>
+                                                    </DataGridTemplateColumn>
+
+                                                    <!-- Detect — opens the controller-input detection dialog -->
+                                                    <DataGridTemplateColumn Header="" Width="50" CanUserResize="False">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Button Content="🎮" Width="42" Margin="0,1,0,1"
+                                                                        Click="DetectBinding_Click"
+                                                                        ToolTip="Auto-detect: press a button or move an input on your controller"/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+
+                                                    <!-- Remove -->
+                                                    <DataGridTemplateColumn Header="" Width="65" CanUserResize="False">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Button Content="Remove" Width="58" Margin="0,1,0,1"
+                                                                        Command="{Binding DataContext.RemoveControllerBindingCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                            <Button Grid.Row="2" Content="Add Binding"
+                                                    HorizontalAlignment="Left" Margin="0,5,0,0" Width="90"
+                                                    Command="{Binding AddControllerBindingCommand}"
+                                                    IsEnabled="{Binding ControllerActionSetSelected, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </Grid>
+                                    </Grid>
                                 </Grid>
                             </TabItem>
                             <TabItem Header="Misc" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">

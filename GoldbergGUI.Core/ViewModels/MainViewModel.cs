@@ -62,6 +62,9 @@ namespace GoldbergGUI.Core.ViewModels
         private string _selectedTheme;
         private ObservableCollection<WorkshopMod> _workshopMods;
         private bool? _allModsEnabled = true;
+        private ObservableCollection<ControllerActionSet> _controllerActionSets;
+        private ControllerActionSet _selectedControllerActionSet;
+        private string _controllerTemplateName;
         // Command backing fields — all cached so bindings always get the same instance
         private IMvxCommand _openFileCommand;
         private IMvxCommand _findIdCommand;
@@ -78,6 +81,13 @@ namespace GoldbergGUI.Core.ViewModels
         private IMvxCommand _removeWorkshopModCommand;
         private IMvxCommand _moveModUpCommand;
         private IMvxCommand _moveModDownCommand;
+        private IMvxCommand _addControllerActionSetCommand;
+        private IMvxCommand _removeControllerActionSetCommand;
+        private IMvxCommand _addControllerBindingCommand;
+        private IMvxCommand _removeControllerBindingCommand;
+        private IMvxCommand _fetchControllerConfigCommand;
+        private IMvxCommand _fetchControllerByFileIdCommand;
+        private string _controllerVdfFileId = string.Empty;
 
         private static readonly Regex PasteDlcRegex = new Regex(@"(?<id>.*) *= *(?<n>.*)");
 
@@ -514,6 +524,45 @@ namespace GoldbergGUI.Core.ViewModels
             WorkshopMods = new ObservableCollection<WorkshopMod>(_workshopMods);
         }
 
+        // -----------------------------------------------------------------------
+        // Properties — Controller
+        // -----------------------------------------------------------------------
+
+        public ObservableCollection<ControllerActionSet> ControllerActionSets
+        {
+            get => _controllerActionSets;
+            set { _controllerActionSets = value; RaisePropertyChanged(() => ControllerActionSets); }
+        }
+
+        public ControllerActionSet SelectedControllerActionSet
+        {
+            get => _selectedControllerActionSet;
+            set
+            {
+                _selectedControllerActionSet = value;
+                RaisePropertyChanged(() => SelectedControllerActionSet);
+                RaisePropertyChanged(() => ControllerActionSetSelected);
+            }
+        }
+
+        public bool ControllerActionSetSelected => _selectedControllerActionSet != null;
+
+        /// <summary>Manual file-ID entry for the Steam VDF fallback (e.g. from SteamDB).</summary>
+        public string ControllerVdfFileId
+        {
+            get => _controllerVdfFileId;
+            set { _controllerVdfFileId = value ?? string.Empty; RaisePropertyChanged(() => ControllerVdfFileId); }
+        }
+
+        /// <summary>
+        /// Human-readable name of the Steam controller template detected for the current app
+        /// (e.g. "Gamepad + Keyboard (Mouse)"). Null/empty when no template was found.
+        /// </summary>
+        public string ControllerTemplateName => _controllerTemplateName;
+
+        /// <summary>True when a Steam controller template was detected (shows the info banner).</summary>
+        public bool ControllerTemplateVisible => !string.IsNullOrEmpty(_controllerTemplateName);
+
         public bool SteamInterfacesTxtExists => DllSelected;
 
         /// <summary>True once the user has selected a real DLL path.</summary>
@@ -552,6 +601,12 @@ namespace GoldbergGUI.Core.ViewModels
         public IMvxCommand RemoveWorkshopModCommand        => _removeWorkshopModCommand       ??= new MvxAsyncCommand<WorkshopMod>(RemoveWorkshopMod);
         public IMvxCommand MoveModUpCommand                => _moveModUpCommand               ??= new MvxCommand<WorkshopMod>(MoveModUp);
         public IMvxCommand MoveModDownCommand              => _moveModDownCommand             ??= new MvxCommand<WorkshopMod>(MoveModDown);
+        public IMvxCommand AddControllerActionSetCommand     => _addControllerActionSetCommand     ??= new MvxCommand(AddControllerActionSet);
+        public IMvxCommand RemoveControllerActionSetCommand  => _removeControllerActionSetCommand  ??= new MvxCommand(RemoveControllerActionSet);
+        public IMvxCommand AddControllerBindingCommand       => _addControllerBindingCommand       ??= new MvxCommand(AddControllerBinding);
+        public IMvxCommand RemoveControllerBindingCommand    => _removeControllerBindingCommand    ??= new MvxCommand<ControllerBinding>(RemoveControllerBinding);
+        public IMvxCommand FetchControllerConfigCommand      => _fetchControllerConfigCommand      ??= new MvxAsyncCommand(FetchControllerConfig);
+        public IMvxCommand FetchControllerByFileIdCommand    => _fetchControllerByFileIdCommand    ??= new MvxAsyncCommand(FetchControllerByFileId);
 
         // -----------------------------------------------------------------------
         // Command implementations
@@ -714,13 +769,14 @@ namespace GoldbergGUI.Core.ViewModels
 
             var config = new GoldbergConfiguration
             {
-                AppId = AppId,
-                Achievements = Achievements.ToList(),
-                DlcList = DLCs.ToList(),
-                WorkshopMods = WorkshopMods.ToList(),
-                Offline = Offline,
-                DisableNetworking = DisableNetworking,
-                DisableOverlay = DisableOverlay
+                AppId                = AppId,
+                Achievements         = Achievements.ToList(),
+                DlcList              = DLCs.ToList(),
+                WorkshopMods         = WorkshopMods.ToList(),
+                ControllerActionSets = ControllerActionSets.ToList(),
+                Offline              = Offline,
+                DisableNetworking    = DisableNetworking,
+                DisableOverlay       = DisableOverlay
             };
 
             if (UseSteamclientMode)
@@ -796,29 +852,43 @@ namespace GoldbergGUI.Core.ViewModels
 
             MainWindowEnabled = false;
             StatusText = "Reverting...";
-            var steamclientGameDir = GetSteamclientGameDir(dirPath);
-            await _goldberg.Revert(dirPath);
-            // Also clean up steamclient files from gameDir if it differs from dirPath
-            if (!string.Equals(steamclientGameDir, dirPath, StringComparison.OrdinalIgnoreCase))
-                await _goldberg.RevertSteamclientMode(steamclientGameDir);
-            _steamclientGameDir = null;
-            GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
-            SteamclientModeApplied = _goldberg.SteamclientModeApplied(dirPath);
+            try
+            {
+                var steamclientGameDir = GetSteamclientGameDir(dirPath);
+                await _goldberg.Revert(dirPath);
+                // Also clean up steamclient files from gameDir if it differs from dirPath
+                if (!string.Equals(steamclientGameDir, dirPath, StringComparison.OrdinalIgnoreCase))
+                    await _goldberg.RevertSteamclientMode(steamclientGameDir);
+                _steamclientGameDir = null;
+                GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+                SteamclientModeApplied = _goldberg.SteamclientModeApplied(dirPath);
 
-            AppId = -1;
-            Achievements = new ObservableCollection<Achievement>();
-            DLCs = new ObservableCollection<DlcApp>();
-            WorkshopMods = new ObservableCollection<WorkshopMod>();
-            Offline = false;
-            DisableNetworking = false;
-            DisableOverlay = false;
-            // Reset backing field directly — do NOT use the property setter here as it
-            // would auto-save and wipe the user's global steamclient preference.
-            _useSteamclientMode = false;
-            RaisePropertyChanged(() => UseSteamclientMode);
-
-            MainWindowEnabled = true;
-            StatusText = "Reverted successfully! Ready.";
+                AppId = -1;
+                Achievements = new ObservableCollection<Achievement>();
+                DLCs = new ObservableCollection<DlcApp>();
+                WorkshopMods = new ObservableCollection<WorkshopMod>();
+                ControllerActionSets = new ObservableCollection<ControllerActionSet>();
+                SelectedControllerActionSet = null;
+                _controllerTemplateName = null;
+                RaisePropertyChanged(() => ControllerTemplateName);
+                RaisePropertyChanged(() => ControllerTemplateVisible);
+                Offline = false;
+                DisableNetworking = false;
+                DisableOverlay = false;
+                // Reset backing field directly — do NOT use the property setter here as it
+                // would auto-save and wipe the user's global steamclient preference.
+                _useSteamclientMode = false;
+                RaisePropertyChanged(() => UseSteamclientMode);
+                StatusText = "Reverted successfully! Ready.";
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Revert failed: {ex.Message}  Ready.";
+            }
+            finally
+            {
+                MainWindowEnabled = true;
+            }
         }
 
         private async Task GenerateSteamInterfaces()
@@ -902,6 +972,11 @@ namespace GoldbergGUI.Core.ViewModels
             Achievements = new ObservableCollection<Achievement>();
             DLCs = new ObservableCollection<DlcApp>();
             WorkshopMods = new ObservableCollection<WorkshopMod>();
+            ControllerActionSets = new ObservableCollection<ControllerActionSet>();
+            SelectedControllerActionSet = null;
+            _controllerTemplateName = null;
+            RaisePropertyChanged(() => ControllerTemplateName);
+            RaisePropertyChanged(() => ControllerTemplateVisible);
             AccountName = "Account name...";
             SteamId = -1;
             Offline = false;
@@ -949,6 +1024,13 @@ namespace GoldbergGUI.Core.ViewModels
             Achievements = new ObservableCollection<Achievement>(config.Achievements);
             DLCs = new ObservableCollection<DlcApp>(config.DlcList);
             WorkshopMods = new ObservableCollection<WorkshopMod>(config.WorkshopMods ?? new List<WorkshopMod>());
+            ControllerActionSets = new ObservableCollection<ControllerActionSet>(
+                config.ControllerActionSets ?? new List<ControllerActionSet>());
+            SelectedControllerActionSet = ControllerActionSets.FirstOrDefault();
+            // Template info is live-fetched only; never persisted to disk
+            _controllerTemplateName = null;
+            RaisePropertyChanged(() => ControllerTemplateName);
+            RaisePropertyChanged(() => ControllerTemplateVisible);
             Offline = config.Offline;
             DisableNetworking = config.DisableNetworking;
             DisableOverlay = config.DisableOverlay;
@@ -1186,6 +1268,141 @@ namespace GoldbergGUI.Core.ViewModels
             if (mod == null || _workshopMods == null) return;
             var idx = _workshopMods.IndexOf(mod);
             if (idx >= 0 && idx < _workshopMods.Count - 1) _workshopMods.Move(idx, idx + 1);
+        }
+
+        // -----------------------------------------------------------------------
+        // Controller command implementations
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Auto-fetches a controller VDF (or template info) from Steam using the game's AppID.
+        /// On success, populates ControllerActionSets.  For template-only games, shows the
+        /// template name in the info banner instead of populating the table.
+        /// </summary>
+        private async Task FetchControllerConfig()
+        {
+            if (AppId <= 0) { StatusText = "Set a valid AppID first! Ready."; return; }
+
+            MainWindowEnabled = false;
+            StatusText = $"Searching Steam for a controller config (App {AppId})...";
+            try
+            {
+                var result = await _steam.GetControllerConfig(AppId).ConfigureAwait(true);
+
+                // Always clear stale template info first
+                _controllerTemplateName = null;
+                RaisePropertyChanged(() => ControllerTemplateName);
+                RaisePropertyChanged(() => ControllerTemplateVisible);
+
+                if (result.ActionSets.Count > 0)
+                {
+                    ApplyFetchedControllerSets(result.ActionSets);
+                    StatusText = $"Loaded {result.ActionSets.Count} action set(s) from Steam. Ready.";
+                }
+                else if (result.TemplateName != null)
+                {
+                    // Template or native-support game — XInput works natively; show the info banner
+                    _controllerTemplateName = result.TemplateName;
+                    RaisePropertyChanged(() => ControllerTemplateName);
+                    RaisePropertyChanged(() => ControllerTemplateVisible);
+                    StatusText = result.TemplateIndex.HasValue
+                        ? $"Game uses controller template '{result.TemplateName}' — XInput works natively. Ready."
+                        : $"Game has native controller support — XInput works without custom action sets. Ready.";
+                }
+                else
+                {
+                    StatusText =
+                        $"No controller config found automatically. " +
+                        $"Enter a VDF file ID from steamdb.info/app/{AppId}/config/ and press Fetch. Ready.";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Error fetching controller config: {ex.Message}  Ready.";
+            }
+            finally
+            {
+                MainWindowEnabled = true;
+            }
+        }
+
+        /// <summary>
+        /// Fetches and parses the controller VDF identified by <see cref="ControllerVdfFileId"/>.
+        /// </summary>
+        private async Task FetchControllerByFileId()
+        {
+            if (!long.TryParse(ControllerVdfFileId?.Trim(), out var fileId) || fileId <= 0)
+            {
+                StatusText = "Enter a valid numeric published-file ID. Ready.";
+                return;
+            }
+
+            MainWindowEnabled = false;
+            StatusText = $"Downloading VDF file {fileId}...";
+            try
+            {
+                var sets = await _steam.GetControllerActionSetsByFileId(fileId).ConfigureAwait(true);
+
+                if (sets.Count > 0)
+                {
+                    ApplyFetchedControllerSets(sets);
+                    StatusText = $"Loaded {sets.Count} action set(s) from file {fileId}. Ready.";
+                }
+                else
+                {
+                    StatusText = "Could not parse controller config from that file ID. Ready.";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Error downloading VDF: {ex.Message}  Ready.";
+            }
+            finally
+            {
+                MainWindowEnabled = true;
+            }
+        }
+
+        /// <summary>
+        /// Replaces the current controller action sets with the fetched ones,
+        /// keeping the selection on the first set.
+        /// </summary>
+        private void ApplyFetchedControllerSets(List<ControllerActionSet> sets)
+        {
+            ControllerActionSets = new ObservableCollection<ControllerActionSet>(sets);
+            SelectedControllerActionSet = ControllerActionSets.FirstOrDefault();
+        }
+
+        private void AddControllerActionSet()
+        {
+            var name = "NewActionSet";
+            var counter = 1;
+            while (_controllerActionSets.Any(s => s.Name == name))
+                name = $"NewActionSet{counter++}";
+            var set = new ControllerActionSet { Name = name };
+            _controllerActionSets.Add(set);
+            SelectedControllerActionSet = set;
+        }
+
+        private void RemoveControllerActionSet()
+        {
+            if (_selectedControllerActionSet == null) return;
+            var idx = _controllerActionSets.IndexOf(_selectedControllerActionSet);
+            _controllerActionSets.Remove(_selectedControllerActionSet);
+            SelectedControllerActionSet = _controllerActionSets.Count > 0
+                ? _controllerActionSets[Math.Max(0, idx - 1)]
+                : null;
+        }
+
+        private void AddControllerBinding()
+        {
+            _selectedControllerActionSet?.Bindings.Add(
+                new ControllerBinding { ActionName = "Action", Binding = "A" });
+        }
+
+        private void RemoveControllerBinding(ControllerBinding binding)
+        {
+            _selectedControllerActionSet?.Bindings.Remove(binding);
         }
 
     }

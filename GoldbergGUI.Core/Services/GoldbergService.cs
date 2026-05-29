@@ -5,6 +5,7 @@ using SharpCompress.Archives;
 using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -78,6 +79,10 @@ namespace GoldbergGUI.Core.Services
 
         // Compiled once and reused for every Read() call
         private static readonly Regex DlcKvRegex = new Regex(@"(?<id>.*) *= *(?<n>.*)");
+
+        // Cached as a HashSet for O(1) lookup; avoids allocating the array on every character
+        // when sanitising controller action-set file names.
+        private static readonly HashSet<char> InvalidFileNameChars = new(Path.GetInvalidFileNameChars());
 
         // ReSharper disable StringLiteralTypo
         private readonly List<string> _interfaceNames = new List<string>
@@ -422,15 +427,49 @@ namespace GoldbergGUI.Core.Services
 
             _log.Info($"Loaded {modList.Count} workshop mod(s).");
 
+            // Controller action sets: read from steam_settings/controller/*.txt
+            var controllerSets = new List<ControllerActionSet>();
+            var controllerDir = Path.Combine(path, "steam_settings", "controller");
+            if (Directory.Exists(controllerDir))
+            {
+                await Task.Run(() =>
+                {
+                    foreach (var file in Directory.GetFiles(controllerDir, "*.txt"))
+                    {
+                        var setName     = Path.GetFileNameWithoutExtension(file);
+                        var bindingList = new List<ControllerBinding>();
+                        foreach (var rawLine in File.ReadAllLines(file))
+                        {
+                            var line = rawLine.Trim();
+                            if (string.IsNullOrEmpty(line) || line.StartsWith(";") || line.StartsWith("#")) continue;
+                            var eqIdx = line.IndexOf('=');
+                            if (eqIdx < 0) continue;
+                            bindingList.Add(new ControllerBinding
+                            {
+                                ActionName = line[..eqIdx].Trim(),
+                                Binding    = line[(eqIdx + 1)..].Trim()
+                            });
+                        }
+                        controllerSets.Add(new ControllerActionSet
+                        {
+                            Name     = setName,
+                            Bindings = new ObservableCollection<ControllerBinding>(bindingList)
+                        });
+                    }
+                }).ConfigureAwait(false);
+                _log.Info($"Loaded {controllerSets.Count} controller action set(s).");
+            }
+
             return new GoldbergConfiguration
             {
-                AppId             = appId,
-                Achievements      = achievementList,
-                DlcList           = dlcList,
-                Offline           = offline,
-                DisableNetworking = disableNetworking,
-                DisableOverlay    = disableOverlay,
-                WorkshopMods      = modList
+                AppId                = appId,
+                Achievements         = achievementList,
+                DlcList              = dlcList,
+                Offline              = offline,
+                DisableNetworking    = disableNetworking,
+                DisableOverlay       = disableOverlay,
+                WorkshopMods         = modList,
+                ControllerActionSets = controllerSets
             };
         }
 
@@ -656,6 +695,35 @@ namespace GoldbergGUI.Core.Services
                     JsonSerializer.Serialize(modsJson, jsonOptions)).ConfigureAwait(false);
 
                 _log.Info($"Saved {c.WorkshopMods.Count} workshop mod(s).");
+            }
+
+            // Controller action sets: write to steam_settings/controller/<Name>.txt
+            var controllerDir = Path.Combine(settingsDir, "controller");
+            if (c.ControllerActionSets != null && c.ControllerActionSets.Count > 0)
+            {
+                EnsureDirectory(controllerDir);
+                foreach (var existingFile in Directory.GetFiles(controllerDir, "*.txt"))
+                    File.Delete(existingFile);
+                foreach (var set in c.ControllerActionSets)
+                {
+                    if (string.IsNullOrWhiteSpace(set.Name)) continue;
+                    var safeName = string.Concat(set.Name.Select(ch =>
+                        InvalidFileNameChars.Contains(ch) ? '_' : ch));
+                    var sbCtrl = new StringBuilder();
+                    if (set.Bindings != null)
+                        foreach (var binding in set.Bindings)
+                            if (!string.IsNullOrWhiteSpace(binding.ActionName))
+                                sbCtrl.AppendLine($"{binding.ActionName}={binding.Binding}");
+                    await File.WriteAllTextAsync(
+                        Path.Combine(controllerDir, $"{safeName}.txt"), sbCtrl.ToString())
+                        .ConfigureAwait(false);
+                }
+                _log.Info($"Saved {c.ControllerActionSets.Count} controller action set(s).");
+            }
+            else if (Directory.Exists(controllerDir))
+            {
+                foreach (var f in Directory.GetFiles(controllerDir, "*.txt"))
+                    File.Delete(f);
             }
 
             // For Paradox games, sync .mod files into the game data documents folder so

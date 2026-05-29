@@ -26,6 +26,17 @@ namespace GoldbergGUI.Core.Services
         public Task<List<Achievement>> GetListOfAchievements(SteamApp steamApp);
         public Task<List<DlcApp>> GetListOfDlc(SteamApp steamApp, bool useSteamDb);
         public Task<WorkshopMod> GetWorkshopModInfo(long workshopId);
+        /// <summary>
+        /// Downloads and parses the controller VDF file with the given published-file ID.
+        /// Use this as the manual-entry fallback.
+        /// </summary>
+        public Task<List<ControllerActionSet>> GetControllerActionSetsByFileId(long publishedFileId);
+        /// <summary>
+        /// Comprehensive auto-fetch: scrapes SteamDB for the app's controller config,
+        /// downloads and parses any custom VDF, and — for template-only games — returns
+        /// the template index and human-readable name so the UI can inform the user.
+        /// </summary>
+        public Task<(List<ControllerActionSet> ActionSets, int? TemplateIndex, string TemplateName)> GetControllerConfig(int appId);
     }
 
     class SteamCache
@@ -352,6 +363,645 @@ namespace GoldbergGUI.Core.Services
                 _log.Error($"Failed to fetch workshop info for {workshopId}: {e.Message}");
                 return new WorkshopMod { WorkshopId = workshopId, Name = $"Unknown Mod ({workshopId})" };
             }
+        }
+
+        // -----------------------------------------------------------------------
+        // Controller VDF auto-fetch
+        // -----------------------------------------------------------------------
+
+        // ── Known Steam controller template names (steamcontrollertemplateindex) ─────
+        private static readonly Dictionary<int, string> ControllerTemplateNames = new()
+        {
+            { 0, "Gamepad" },
+            { 1, "Gamepad with Camera Controls" },
+            { 2, "Gamepad with High Precision Camera/Mouse" },
+            { 3, "Keyboard (WASD) and Mouse" },
+            { 4, "Gamepad + Keyboard (Mouse)" },
+            { 5, "Tablet / Trackpad Controls" },
+            { 6, "Minimal Gamepad" },
+            { 7, "Dual-Stage Triggers" },
+            { 8, "Flight Stick / Joystick" },
+        };
+
+        private static string ResolveTemplateName(int index) =>
+            ControllerTemplateNames.TryGetValue(index, out var n) ? n : $"Template #{index}";
+
+        /// <summary>
+        /// Comprehensive controller config fetch:
+        ///   1. Scrapes the SteamDB config page for steamcontrollerconfigdetails (file IDs)
+        ///      and steamcontrollertemplateindex.
+        ///   2. If file IDs found — downloads + parses the first valid VDF.
+        ///   3. If only a template index found — returns it with a human-readable name.
+        ///   4. Falls back to IPublishedFileService/QueryFiles if SteamDB is unavailable.
+        /// </summary>
+        public async Task<(List<ControllerActionSet> ActionSets, int? TemplateIndex, string TemplateName)> GetControllerConfig(int appId)
+        {
+            _log.Info($"[GetControllerConfig] App {appId}...");
+
+            // ── 1. Local Steam appinfo.vdf (fastest, no network, most reliable) ──────
+            var (fileIds, templateIndex) = ReadControllerInfoFromAppInfo(appId);
+            _log.Info($"[GetControllerConfig] appinfo.vdf → {fileIds.Count} file ID(s), template={templateIndex?.ToString() ?? "none"}");
+
+            // ── 2. SteamDB scrape (fallback when appinfo.vdf has nothing) ────────────
+            if (fileIds.Count == 0 && templateIndex == null)
+            {
+                _log.Info($"[GetControllerConfig] appinfo.vdf found nothing — trying SteamDB scrape...");
+                (fileIds, templateIndex) = await ScrapeControllerConfigFromSteamDb(appId).ConfigureAwait(false);
+            }
+
+            foreach (var fid in fileIds)
+            {
+                var sets = await GetControllerActionSetsByFileId(fid).ConfigureAwait(false);
+                if (sets.Count > 0)
+                {
+                    _log.Info($"[GetControllerConfig] Got {sets.Count} action set(s) from file {fid}.");
+                    return (sets, null, null);
+                }
+            }
+
+            // If a template index was found (and no custom VDF parsed successfully), return it
+            if (templateIndex.HasValue)
+            {
+                var tname = ResolveTemplateName(templateIndex.Value);
+                _log.Info($"[GetControllerConfig] Template {templateIndex}: {tname}");
+                return (new List<ControllerActionSet>(), templateIndex, tname);
+            }
+
+            // ── 3. QueryFiles API — typed (controller_xbox360/xboxone with KV tag) ───
+            _log.Info($"[GetControllerConfig] Trying QueryFiles (typed) for app {appId}...");
+            foreach (var ctType in new[] { "controller_xbox360", "controller_xboxone" })
+            {
+                var qfIds = await QueryControllerFileIds(appId, ctType).ConfigureAwait(false);
+                foreach (var fid in qfIds)
+                {
+                    var sets = await GetControllerActionSetsByFileId(fid).ConfigureAwait(false);
+                    if (sets.Count > 0)
+                    {
+                        _log.Info($"[GetControllerConfig] Got {sets.Count} action set(s) via QueryFiles[{ctType}] file {fid}.");
+                        return (sets, null, null);
+                    }
+                }
+            }
+
+            // ── 4. QueryFiles API — broad (any game-managed file, no tag filter) ─────
+            _log.Info($"[GetControllerConfig] Trying QueryFiles (broad) for app {appId}...");
+            var broadIds = await QueryControllerFileIdsBroad(appId).ConfigureAwait(false);
+            foreach (var fid in broadIds)
+            {
+                var sets = await GetControllerActionSetsByFileId(fid).ConfigureAwait(false);
+                if (sets.Count > 0)
+                {
+                    _log.Info($"[GetControllerConfig] Got {sets.Count} action set(s) via QueryFiles[broad] file {fid}.");
+                    return (sets, null, null);
+                }
+            }
+
+            // ── 5. Steam Store API — detect games with native controller support ──────
+            var supportLevel = await GetControllerSupportFromSteamStore(appId).ConfigureAwait(false);
+            if (supportLevel is "full" or "partial")
+            {
+                _log.Info($"[GetControllerConfig] App {appId} reports '{supportLevel}' controller support — treating as native/template.");
+                return (new List<ControllerActionSet>(), null, "Native XInput / Generic Gamepad Support");
+            }
+
+            _log.Warn($"[GetControllerConfig] No controller config found for app {appId}.");
+            return (new List<ControllerActionSet>(), null, null);
+        }
+
+        // -----------------------------------------------------------------------
+        // Local appinfo.vdf reader
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Reads Steam's local <c>appcache\appinfo.vdf</c> to extract
+        /// <c>steamcontrollerconfigdetails</c> (file IDs) and
+        /// <c>steamcontrollertemplateindex</c> for the given app without any
+        /// network access.  Falls back to empty/null if Steam is not found or
+        /// the file cannot be parsed.
+        /// </summary>
+        private (List<long> fileIds, int? templateIndex) ReadControllerInfoFromAppInfo(int appId)
+        {
+            var empty = (new List<long>(), (int?)null);
+            try
+            {
+                var steamPath = GetSteamInstallPath();
+                if (steamPath == null) return empty;
+
+                var appInfoPath = Path.Combine(steamPath, "appcache", "appinfo.vdf");
+                if (!File.Exists(appInfoPath)) return empty;
+
+                using var fs  = new FileStream(appInfoPath, FileMode.Open,
+                                               FileAccess.Read, FileShare.ReadWrite);
+                using var br  = new BinaryReader(fs);
+
+                var magic = br.ReadUInt32();
+                br.ReadUInt32();  // universe
+
+                // Supported magic numbers (SteamKit2 convention):
+                //   0x07564427 = Magic27 (no size field)
+                //   0x07564428 = Magic28 (size field, no extra hash)
+                //   0x07564429 = Magic29 (size field + extra binary hash)
+                const uint Magic27 = 0x07564427u;
+                const uint Magic28 = 0x07564428u;
+                const uint Magic29 = 0x07564429u;
+
+                bool hasSizeField  = magic == Magic28 || magic == Magic29;
+                bool hasExtraHash  = magic == Magic29;
+
+                if (magic != Magic27 && magic != Magic28 && magic != Magic29)
+                {
+                    _log.Warn($"[AppInfo] Unknown magic 0x{magic:X8} — skipping.");
+                    return empty;
+                }
+
+                while (fs.Position < fs.Length - 4)
+                {
+                    var id = br.ReadUInt32();
+                    if (id == 0) break;  // end-of-file sentinel
+
+                    long sectionBase = fs.Position;   // position right after appid
+                    uint sectionSize = 0;
+                    if (hasSizeField) sectionSize = br.ReadUInt32();
+
+                    if (id != (uint)appId)
+                    {
+                        // Skip entry
+                        if (hasSizeField && sectionSize > 0)
+                            fs.Seek(sectionBase + sectionSize, SeekOrigin.Begin);
+                        else
+                            AppInfoSkipBinaryKv(br);
+                        continue;
+                    }
+
+                    // ── Found our app ──────────────────────────────────────────
+                    // Skip fixed-size per-entry header fields:
+                    br.ReadUInt32(); // state
+                    br.ReadUInt32(); // lastUpdated
+                    br.ReadUInt64(); // accessToken
+                    br.ReadBytes(20); // sha1 (text)
+                    br.ReadUInt32(); // changeNumber
+                    if (hasExtraHash) br.ReadBytes(20); // sha1 (binary)
+
+                    var fileIds = new List<long>();
+                    int? templateIdx = null;
+
+                    // Walk the entire KV tree; the keys live somewhere inside.
+                    AppInfoWalkKv(br, (key, type, reader) =>
+                    {
+                        if (key == "steamcontrollerconfigdetails" && type == 0x02)
+                        {
+                            var val = AppInfoReadCString(reader);
+                            foreach (var part in val.Split(
+                                         new[] { ' ', '\t', ',', ';' },
+                                         StringSplitOptions.RemoveEmptyEntries))
+                                if (long.TryParse(part, out var fid) && fid > 0)
+                                    fileIds.Add(fid);
+                        }
+                        else if (key == "steamcontrollertemplateindex" && type == 0x03)
+                        {
+                            templateIdx = reader.ReadInt32();
+                        }
+                        else
+                        {
+                            AppInfoSkipKvValue(reader, type);
+                        }
+                    });
+
+                    _log.Info($"[AppInfo] App {appId}: {fileIds.Count} VDF ID(s), template={templateIdx?.ToString() ?? "none"}");
+                    return (fileIds, templateIdx);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.Warn($"[AppInfo] Error reading appinfo.vdf: {ex.Message}");
+            }
+            return empty;
+        }
+
+        private static string GetSteamInstallPath()
+        {
+            // Try the standard 32-bit registry key first (most common on 64-bit Windows)
+            foreach (var hive in new[] {
+                @"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam",
+                @"HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam",
+                @"HKEY_CURRENT_USER\SOFTWARE\Valve\Steam" })
+            {
+                var val = Microsoft.Win32.Registry.GetValue(hive, "InstallPath", null)
+                       ?? Microsoft.Win32.Registry.GetValue(hive, "SteamPath",   null);
+                if (val is string s && Directory.Exists(s)) return s;
+            }
+            return null;
+        }
+
+        // ── Minimal binary-KV helpers ────────────────────────────────────────
+
+        /// <summary>
+        /// Walks a binary KV block, invoking <paramref name="onLeaf"/> for every
+        /// non-nested entry.  Nested dicts (type 0x01) are recursed automatically.
+        /// </summary>
+        private static void AppInfoWalkKv(BinaryReader br,
+            Action<string, byte, BinaryReader> onLeaf)
+        {
+            while (true)
+            {
+                if (br.BaseStream.Position >= br.BaseStream.Length) return;
+                byte type = br.ReadByte();
+                if (type == 0x00) return;  // end of block
+
+                var key = AppInfoReadCString(br);
+
+                if (type == 0x01)
+                {
+                    // Nested object — recurse, same visitor
+                    AppInfoWalkKv(br, onLeaf);
+                }
+                else
+                {
+                    onLeaf(key, type, br);
+                }
+            }
+        }
+
+        /// <summary>Skips an entire binary-KV block (used to skip uninteresting entries).</summary>
+        private static void AppInfoSkipBinaryKv(BinaryReader br)
+        {
+            while (true)
+            {
+                if (br.BaseStream.Position >= br.BaseStream.Length) return;
+                byte type = br.ReadByte();
+                if (type == 0x00) return;
+
+                AppInfoReadCString(br); // consume key
+                if (type == 0x01)
+                    AppInfoSkipBinaryKv(br);  // recurse into nested
+                else
+                    AppInfoSkipKvValue(br, type);
+            }
+        }
+
+        /// <summary>Consumes and discards one KV value based on its type byte.</summary>
+        private static void AppInfoSkipKvValue(BinaryReader br, byte type)
+        {
+            switch (type)
+            {
+                case 0x02: AppInfoReadCString(br); break;        // string
+                case 0x03: br.ReadInt32(); break;                 // int32
+                case 0x04: br.ReadSingle(); break;                // float
+                case 0x05: br.ReadInt32(); break;                 // pointer
+                case 0x06: AppInfoReadWString(br); break;         // wstring
+                case 0x07: br.ReadUInt32(); break;                // color
+                case 0x08: br.ReadUInt64(); break;                // uint64
+                case 0x0A: br.ReadUInt64(); break;                // uint64 alt
+                case 0x0B: br.ReadInt64(); break;                 // int64
+            }
+            // Unknown types: skip nothing (will likely de-sync, but won't crash)
+        }
+
+        private static string AppInfoReadCString(BinaryReader br)
+        {
+            var sb = new System.Text.StringBuilder();
+            byte b;
+            while ((b = br.ReadByte()) != 0)
+                sb.Append((char)b);
+            return sb.ToString();
+        }
+
+        private static void AppInfoReadWString(BinaryReader br)
+        {
+            while (true)
+            {
+                char c = (char)br.ReadUInt16();
+                if (c == '\0') break;
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // Broad QueryFiles fallback (no KV tag filter)
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Queries IPublishedFileService for ALL game-managed files (filetype=12)
+        /// for the given app, without the controller_type KV-tag filter.
+        /// This catches games whose VDFs lack the controller_type tag.
+        /// </summary>
+        private async Task<List<long>> QueryControllerFileIdsBroad(int appId)
+        {
+            var ids = new List<long>();
+            try
+            {
+                var key = Uri.EscapeDataString(Secrets.SteamWebApiKey());
+                var url = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/" +
+                          $"?key={key}" +
+                          $"&query_type=11&page=1&numperpage=20" +
+                          $"&appid={appId}" +
+                          "&filetype=12" +
+                          "&return_details=1";
+
+                var body = await _httpClient.GetStringAsync(url).ConfigureAwait(false);
+                _log.Debug($"[QueryFiles/broad] {body[..Math.Min(300, body.Length)]}");
+
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty("response", out var resp)) return ids;
+                if (!resp.TryGetProperty("publishedfiledetails", out var arr) &&
+                    !resp.TryGetProperty("publishedfileids",     out arr))
+                    return ids;
+                if (arr.ValueKind != JsonValueKind.Array) return ids;
+
+                foreach (var elem in arr.EnumerateArray())
+                {
+                    string idStr = null;
+                    if (elem.ValueKind == JsonValueKind.Object &&
+                        elem.TryGetProperty("publishedfileid", out var fp))
+                        idStr = fp.GetString();
+                    else if (elem.ValueKind == JsonValueKind.String)
+                        idStr = elem.GetString();
+                    if (long.TryParse(idStr, out var id) && id > 0) ids.Add(id);
+                }
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"QueryControllerFileIdsBroad: {e.Message}");
+            }
+            return ids;
+        }
+
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Scrapes https://steamdb.info/app/{appId}/config/ and extracts:
+        ///   • steamcontrollerconfigdetails  → list of published-file IDs
+        ///   • steamcontrollertemplateindex  → integer template index
+        /// Returns empty/null values if the page is unavailable (Cloudflare, JS-rendered, etc.).
+        /// </summary>
+        private async Task<(List<long> fileIds, int? templateIndex)> ScrapeControllerConfigFromSteamDb(int appId)
+        {
+            var fileIds = new List<long>();
+            int? templateIndex = null;
+            try
+            {
+                var url = $"https://steamdb.info/app/{appId}/config/";
+                _log.Info($"[SteamDB] Fetching controller config from {url}");
+
+                // Use a realistic browser request to avoid Cloudflare / anti-bot 403.
+                // Per-request headers are set on HttpRequestMessage so they don't affect
+                // other requests that share _httpClient.
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.TryAddWithoutValidation("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36");
+                req.Headers.TryAddWithoutValidation("Accept",
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif," +
+                    "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7");
+                req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+                req.Headers.TryAddWithoutValidation("Cache-Control", "max-age=0");
+                req.Headers.TryAddWithoutValidation("Sec-CH-UA",
+                    "\"Google Chrome\";v=\"125\", \"Chromium\";v=\"125\", \"Not/A)Brand\";v=\"24\"");
+                req.Headers.TryAddWithoutValidation("Sec-CH-UA-Mobile", "?0");
+                req.Headers.TryAddWithoutValidation("Sec-CH-UA-Platform", "\"Windows\"");
+                req.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
+                req.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
+                req.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "none");
+                req.Headers.TryAddWithoutValidation("Sec-Fetch-User", "?1");
+                req.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
+
+                var response = await _httpClient.SendAsync(req).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _log.Warn($"[SteamDB] HTTP {(int)response.StatusCode} for app {appId}");
+                    return (fileIds, templateIndex);
+                }
+
+                var html = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                _log.Debug($"[SteamDB] Response ({html.Length} chars): {html[..Math.Min(300, html.Length)]}");
+
+                // Detect Cloudflare challenge pages (small, contain specific strings)
+                if (html.Length < 50_000 &&
+                    (html.Contains("Just a moment", StringComparison.OrdinalIgnoreCase) ||
+                     html.Contains("Checking your browser", StringComparison.OrdinalIgnoreCase) ||
+                     html.Contains("cf-browser-verification", StringComparison.OrdinalIgnoreCase)))
+                {
+                    _log.Warn("[SteamDB] Cloudflare challenge page detected — scraping skipped.");
+                    return (fileIds, templateIndex);
+                }
+
+                var parser = new HtmlParser();
+                var doc    = parser.ParseDocument(html);
+
+                // ── Strategy 1: standard <tr>/<td> table rows ───────────────────────
+                foreach (var row in doc.QuerySelectorAll("tr"))
+                {
+                    var cells = row.QuerySelectorAll("td");
+                    if (cells.Length < 2) continue;
+                    ApplySteamDbKv(
+                        cells[0].TextContent.Trim().ToLowerInvariant(),
+                        cells[1].TextContent.Trim(),
+                        fileIds, ref templateIndex);
+                }
+
+                // ── Strategy 2: any element whose entire text IS the key,
+                //    followed by the value in the immediately adjacent sibling.
+                //    Handles div-based or other non-table layouts.
+                if (fileIds.Count == 0 && templateIndex == null)
+                {
+                    foreach (var elem in doc.All)
+                    {
+                        var txt = elem.TextContent.Trim().ToLowerInvariant();
+                        if (txt != "steamcontrollerconfigdetails" &&
+                            txt != "steamcontrollertemplateindex") continue;
+                        var sibling = elem.NextElementSibling;
+                        if (sibling == null) continue;
+                        ApplySteamDbKv(txt, sibling.TextContent.Trim(), fileIds, ref templateIndex);
+                    }
+                }
+
+                _log.Info($"[SteamDB] Result — file IDs: [{string.Join(", ", fileIds)}], " +
+                          $"template: {templateIndex?.ToString() ?? "none"}");
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"[SteamDB] Scrape failed for app {appId}: {e.Message}");
+            }
+            return (fileIds, templateIndex);
+        }
+
+        // Helper shared by both SteamDB scraping strategies
+        private static void ApplySteamDbKv(string key, string val,
+            List<long> fileIds, ref int? templateIndex)
+        {
+            if (key == "steamcontrollerconfigdetails")
+            {
+                foreach (var part in val.Split(new[] { ' ', '\t', ',', ';' },
+                             StringSplitOptions.RemoveEmptyEntries))
+                    if (long.TryParse(part, out var id) && id > 0)
+                        fileIds.Add(id);
+            }
+            else if (key == "steamcontrollertemplateindex")
+            {
+                if (int.TryParse(val, out var idx))
+                    templateIndex = idx;
+            }
+        }
+
+        /// <summary>
+        /// Queries the Steam Store API for the game's controller support level.
+        /// Returns "full", "partial", "none", or null on network/parse error.
+        /// NOTE: Do NOT add a "filters=" parameter — "controller_support" is not a valid
+        /// filter name; sending it causes Steam to return an empty data object.
+        /// </summary>
+        private async Task<string> GetControllerSupportFromSteamStore(int appId)
+        {
+            try
+            {
+                // Full appdetails — no filters, so controller_support is always present
+                // when Steam has it set for the game.
+                var url  = $"https://store.steampowered.com/api/appdetails/?appids={appId}";
+                _log.Info($"[Store API] Checking controller support for app {appId}");
+                var body = await _httpClient.GetStringAsync(url).ConfigureAwait(false);
+                _log.Debug($"[Store API] Response prefix: {body[..Math.Min(200, body.Length)]}");
+
+                using var doc = JsonDocument.Parse(body);
+
+                if (!doc.RootElement.TryGetProperty(appId.ToString(), out var appData))
+                {
+                    _log.Warn($"[Store API] No entry for appid {appId} in response");
+                    return null;
+                }
+
+                if (!appData.TryGetProperty("success", out var suc) || !suc.GetBoolean())
+                {
+                    _log.Warn($"[Store API] success=false for app {appId}");
+                    return null;
+                }
+
+                if (!appData.TryGetProperty("data", out var data))
+                {
+                    _log.Warn($"[Store API] No 'data' object for app {appId}");
+                    return null;
+                }
+
+                // controller_support is absent when the game has no controller support at all
+                if (!data.TryGetProperty("controller_support", out var cs))
+                {
+                    _log.Info($"[Store API] App {appId}: no controller_support field → none");
+                    return "none";
+                }
+
+                var level = cs.GetString() ?? "none";
+                _log.Info($"[Store API] App {appId}: controller_support = {level}");
+                return level;
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"[Store API] Failed for app {appId}: {e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Downloads and parses the controller VDF published file with the given ID.
+        /// This is the manual-entry fallback: users look up the file ID on SteamDB.
+        /// </summary>
+        public async Task<List<ControllerActionSet>> GetControllerActionSetsByFileId(long publishedFileId)
+        {
+            try
+            {
+                var vdfContent = await DownloadPublishedFileContent(publishedFileId).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(vdfContent)) return new List<ControllerActionSet>();
+                return VdfControllerParser.Parse(vdfContent);
+            }
+            catch (Exception e)
+            {
+                _log.Error($"GetControllerActionSetsByFileId({publishedFileId}): {e.Message}");
+                return new List<ControllerActionSet>();
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // Controller VDF helpers
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Queries IPublishedFileService/QueryFiles for game-managed files whose
+        /// "controller_type" KV tag matches <paramref name="controllerType"/>.
+        /// </summary>
+        private async Task<List<long>> QueryControllerFileIds(int appId, string controllerType)
+        {
+            var ids = new List<long>();
+            try
+            {
+                // Array brackets must be percent-encoded; controller_type needs no encoding.
+                var key   = Uri.EscapeDataString(Secrets.SteamWebApiKey());
+                var ctEnc = Uri.EscapeDataString(controllerType);
+                var url = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/" +
+                          $"?key={key}" +
+                          $"&query_type=11&page=1&numperpage=20" +
+                          $"&appid={appId}" +
+                          "&filetype=12" +                          // k_EPublishedFileType_GameManagedItem
+                          "&return_details=1" +
+                          "&required_kv_tags%5B0%5D%5Bkey%5D=controller_type" +
+                          $"&required_kv_tags%5B0%5D%5Bvalue%5D={ctEnc}";
+
+                var body = await _httpClient.GetStringAsync(url).ConfigureAwait(false);
+                _log.Debug($"[QueryFiles/{controllerType}] {body[..Math.Min(300, body.Length)]}");
+
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty("response", out var resp)) return ids;
+
+                // return_details=1 → "publishedfiledetails"; older/fallback → "publishedfileids"
+                if (!resp.TryGetProperty("publishedfiledetails", out var arr) &&
+                    !resp.TryGetProperty("publishedfileids",     out arr))
+                    return ids;
+                if (arr.ValueKind != JsonValueKind.Array) return ids;
+
+                foreach (var elem in arr.EnumerateArray())
+                {
+                    string idStr = null;
+                    if (elem.ValueKind == JsonValueKind.Object &&
+                        elem.TryGetProperty("publishedfileid", out var fp))
+                        idStr = fp.GetString();
+                    else if (elem.ValueKind == JsonValueKind.String)
+                        idStr = elem.GetString();
+
+                    if (long.TryParse(idStr, out var id) && id > 0) ids.Add(id);
+                }
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"QueryControllerFileIds({controllerType}): {e.Message}");
+            }
+            return ids;
+        }
+
+        /// <summary>
+        /// Uses GetPublishedFileDetails to obtain the CDN download URL for a
+        /// published file, then downloads its text content.
+        /// </summary>
+        private async Task<string> DownloadPublishedFileContent(long fileId)
+        {
+            var apiUrl = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/" +
+                         "?key=" + Secrets.SteamWebApiKey();
+
+            var postData = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("itemcount", "1"),
+                new KeyValuePair<string, string>("publishedfileids[0]", fileId.ToString())
+            });
+
+            var resp = await _httpClient.PostAsync(apiUrl, postData).ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            _log.Debug($"[GetPublishedFileDetails/{fileId}] {body[..Math.Min(300, body.Length)]}");
+
+            using var doc = JsonDocument.Parse(body);
+            var details = doc.RootElement
+                .GetProperty("response")
+                .GetProperty("publishedfiledetails")[0];
+
+            if (!details.TryGetProperty("file_url", out var urlProp)) return null;
+            var fileUrl = urlProp.GetString();
+            if (string.IsNullOrWhiteSpace(fileUrl)) return null;
+
+            _log.Info($"Downloading VDF from {fileUrl}");
+            return await _httpClient.GetStringAsync(fileUrl).ConfigureAwait(false);
         }
 
         private static string PrepareStringToCompare(string name)

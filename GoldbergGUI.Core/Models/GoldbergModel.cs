@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
+using GoldbergGUI.Core.Utils;
 // ReSharper disable ClassNeverInstantiated.Global
 // ReSharper disable UnusedMember.Global
 
@@ -58,7 +60,11 @@ namespace GoldbergGUI.Core.Models
         /// </summary>
         public List<WorkshopMod> WorkshopMods { get; set; }
 
-        // Add controller setting here!
+        /// <summary>
+        /// Controller action sets (files in steam_settings/controller/).
+        /// </summary>
+        public List<ControllerActionSet> ControllerActionSets { get; set; }
+
         /// <summary>
         /// Set offline mode.
         /// </summary>
@@ -382,6 +388,72 @@ namespace GoldbergGUI.Core.Models
             Int,
             Float,
             AvgRate
+        }
+    }
+
+    public class ControllerActionSet : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        private void NotifyPropertyChanged(string p) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
+
+        private string _name = string.Empty;
+        public string Name
+        {
+            get => _name;
+            set { if (_name == value) return; _name = value; NotifyPropertyChanged(nameof(Name)); }
+        }
+
+        public ObservableCollection<ControllerBinding> Bindings { get; set; } = new();
+    }
+
+    public class ControllerBinding : System.ComponentModel.INotifyPropertyChanged
+    {
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        private void NotifyPropertyChanged(string p) =>
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
+
+        private string _actionName = string.Empty;
+        public string ActionName
+        {
+            get => _actionName;
+            set { if (_actionName == value) return; _actionName = value; NotifyPropertyChanged(nameof(ActionName)); }
+        }
+
+        private string _binding = string.Empty;
+
+        /// <summary>The raw gbe_fork binding string (e.g. "RBUMPER"). Persisted to file.</summary>
+        public string Binding
+        {
+            get => _binding;
+            set
+            {
+                if (_binding == value) return;
+                _binding = value;
+                NotifyPropertyChanged(nameof(Binding));
+                NotifyPropertyChanged(nameof(BindingFriendly));
+            }
+        }
+
+        /// <summary>
+        /// Human-readable version of <see cref="Binding"/> shown in the UI
+        /// (e.g. "Right Bumper"). Not persisted.
+        /// Setting this property converts a friendly name back to the internal value via
+        /// <see cref="ControllerBindingMap"/> before storing, so unknown strings are passed
+        /// through unchanged.
+        /// </summary>
+        [JsonIgnore]
+        public string BindingFriendly
+        {
+            get => ControllerBindingMap.ToFriendly(_binding);
+            set
+            {
+                var intern = ControllerBindingMap.ToInternal(value ?? string.Empty);
+                if (_binding == intern) return;
+                _binding = intern;
+                NotifyPropertyChanged(nameof(Binding));
+                NotifyPropertyChanged(nameof(BindingFriendly));
+            }
         }
     }
 
