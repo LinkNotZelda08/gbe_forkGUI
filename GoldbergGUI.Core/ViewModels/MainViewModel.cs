@@ -888,7 +888,7 @@ namespace GoldbergGUI.Core.ViewModels
             if (!GetDllPathDir(out var dirPath)) return;
 
             var confirm = MessageBox.Show(
-                "This will remove all Goldberg files and restore the original Steam API DLL.\n\nAre you sure?",
+                "This will remove all gbe_fork and RUNE files and restore the original Steam API DLL.\n\nAre you sure?",
                 "Revert Changes",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
@@ -903,8 +903,8 @@ namespace GoldbergGUI.Core.ViewModels
                 await _goldberg.Revert(dirPath);
                 if (!string.Equals(steamclientGameDir, dirPath, StringComparison.OrdinalIgnoreCase))
                     await _goldberg.RevertSteamclientMode(steamclientGameDir);
-                if (_goldberg.RuneApplied(dirPath))
-                    await _goldberg.RevertRune(dirPath);
+                // Always run RevertRune — it uses DeleteIfExists so is safe even if nothing is there
+                await _goldberg.RevertRune(dirPath);
                 _steamclientGameDir = null;
                 GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
                 RuneApplied = _goldberg.RuneApplied(dirPath);
