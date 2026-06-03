@@ -310,6 +310,51 @@
                 <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
             </Style>
 
+            <!-- ── RadioButton ── -->
+            <Style TargetType="RadioButton">
+                <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Cursor"     Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Grid Background="Transparent">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid Grid.Column="0" Width="14" Height="14" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <Ellipse x:Name="OuterRing"
+                                             Stroke="{DynamicResource BorderBrush}"
+                                             StrokeThickness="1.5"
+                                             Fill="{DynamicResource SurfaceBrush}"/>
+                                    <Ellipse x:Name="InnerDot"
+                                             Width="6" Height="6"
+                                             Fill="{DynamicResource AccentBrush}"
+                                             Visibility="Collapsed"/>
+                                </Grid>
+                                <ContentPresenter Grid.Column="1"
+                                                  Margin="6,0,0,0"
+                                                  VerticalAlignment="Center"
+                                                  RecognizesAccessKey="True"/>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="OuterRing" Property="Stroke" Value="{DynamicResource AccentBrush}"/>
+                                    <Setter TargetName="InnerDot"  Property="Visibility" Value="Visible"/>
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="OuterRing" Property="Stroke" Value="{DynamicResource AccentHoverBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Foreground" Value="{DynamicResource ForegroundDimBrush}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- ── GroupBox ── -->
             <Style TargetType="GroupBox">
                 <Setter Property="BorderBrush"  Value="{DynamicResource BorderBrush}"/>

@@ -20,10 +20,25 @@
         </Grid.RowDefinitions>
         <Grid IsEnabled="{Binding MainWindowEnabled}" Margin="5,5,5,5">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <TabControl Margin="5,5,5,5">
+            <!-- Emulator selector — sits right above the tab header row -->
+            <Border Grid.Row="0" Margin="5,5,5,0"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                    Padding="4,5">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Emulator:" VerticalAlignment="Center" Margin="0,0,10,0"
+                               Foreground="{DynamicResource ForegroundDimBrush}"/>
+                    <RadioButton Content="gbe__fork" IsChecked="{Binding UseGbeMode, Mode=TwoWay}"
+                                 VerticalAlignment="Center" Margin="0,0,14,0"
+                                 ToolTip="Use gbe_fork (Goldberg) emulator"/>
+                    <RadioButton Content="_RUNE" IsChecked="{Binding UseRuneMode, Mode=TwoWay}"
+                                 VerticalAlignment="Center"
+                                 ToolTip="Use RUNE emulator (steam_emu.ini + version.dll)"/>
+                </StackPanel>
+            </Border>
+            <TabControl Grid.Row="1" Margin="5,5,5,5">
                 <!-- General -->
                 <TabItem Header="General">
                     <!--
@@ -99,7 +114,8 @@
                                     </Grid>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Achievements" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
+                            <TabItem Header="Achievements" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}"
+                                     Visibility="{Binding UseGbeMode, Converter={StaticResource B2V}}">
                                 <Grid Margin="0,10,0,10">
                                     <Grid.RowDefinitions>
                                         <RowDefinition/>
@@ -137,7 +153,8 @@
                                     </Grid>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Workshop Mods" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
+                            <TabItem Header="Workshop Mods" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}"
+                                     Visibility="{Binding UseGbeMode, Converter={StaticResource B2V}}">
                                 <Grid Margin="0,10,0,10">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -230,7 +247,8 @@
                                     </TextBlock>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Controller" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
+                            <TabItem Header="Controller" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}"
+                                     Visibility="{Binding UseGbeMode, Converter={StaticResource B2V}}">
                                 <Grid Margin="0,10,0,10">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -542,6 +560,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal">
                     <CheckBox Content="gbe__fork applied" IsChecked="{Binding GoldbergApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                    <CheckBox Content="RUNE applied" IsChecked="{Binding RuneApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
                     <CheckBox Content="Steamclient mode" IsChecked="{Binding SteamclientModeApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center"/>
                 </StackPanel>
                 <Button Content="_Save" Command="{Binding SaveConfigCommand}" Width="90" Grid.Column="1" Margin="0,0,5,0" Padding="8,4"/>

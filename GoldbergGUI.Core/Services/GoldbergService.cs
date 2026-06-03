@@ -39,6 +39,9 @@ namespace GoldbergGUI.Core.Services
         string GetSteamclientExeName(string path);
         List<string> Languages();
         string DetectPrimaryFilename(string modFolderPath);
+        Task ApplyRune(string path, GoldbergConfiguration config, string accountName, long steamId, string language);
+        Task RevertRune(string path);
+        bool RuneApplied(string path);
     }
 
     // ReSharper disable once UnusedType.Global
@@ -59,6 +62,8 @@ namespace GoldbergGUI.Core.Services
 
         private readonly string _goldbergZipPath = Path.Combine(Directory.GetCurrentDirectory(), "goldberg.zip");
         private readonly string _goldbergPath    = Path.Combine(Directory.GetCurrentDirectory(), "goldberg");
+        private readonly string _runePath        = Path.Combine(Directory.GetCurrentDirectory(), "rune");
+        private readonly string _steamstubPath   = Path.Combine(Directory.GetCurrentDirectory(), "steamstub");
 
         // gbe_fork uses "GSE Saves" instead of "Goldberg SteamEmu Saves"
         private static readonly string GlobalSettingsPath =
@@ -1101,15 +1106,7 @@ namespace GoldbergGUI.Core.Services
         public async Task GenerateInterfacesFile(string filePath)
         {
             _log.Debug($"GenerateInterfacesFile {filePath}");
-            var result     = new HashSet<string>();
-            var dllContent = await File.ReadAllTextAsync(filePath, Encoding.Latin1).ConfigureAwait(false);
-
-            foreach (var name in _interfaceNames)
-                FindInterfaces(ref result, dllContent, new Regex($"{name}\\d{{3}}"));
-
-            // SteamController has a special versioned and non-versioned variant
-            if (!FindInterfaces(ref result, dllContent, new Regex(@"STEAMCONTROLLER_INTERFACE_VERSION\d{3}")))
-                FindInterfaces(ref result, dllContent, new Regex("STEAMCONTROLLER_INTERFACE_VERSION"));
+            var result = await ScanInterfacesFromDll(filePath).ConfigureAwait(false);
 
             var dirPath = Path.GetDirectoryName(filePath);
             if (dirPath == null) return;
@@ -1123,6 +1120,17 @@ namespace GoldbergGUI.Core.Services
                 await destination.WriteLineAsync(s).ConfigureAwait(false);
 
             _log.Info($"Wrote steam_interfaces.txt to {destPath}");
+        }
+
+        private async Task<HashSet<string>> ScanInterfacesFromDll(string filePath)
+        {
+            var result     = new HashSet<string>();
+            var dllContent = await File.ReadAllTextAsync(filePath, Encoding.Latin1).ConfigureAwait(false);
+            foreach (var name in _interfaceNames)
+                FindInterfaces(ref result, dllContent, new Regex($"{name}\\d{{3}}"));
+            if (!FindInterfaces(ref result, dllContent, new Regex(@"STEAMCONTROLLER_INTERFACE_VERSION\d{3}")))
+                FindInterfaces(ref result, dllContent, new Regex("STEAMCONTROLLER_INTERFACE_VERSION"));
+            return result;
         }
 
         // -----------------------------------------------------------------------
@@ -1446,6 +1454,255 @@ namespace GoldbergGUI.Core.Services
                 .FirstOrDefault();
             return modFile != null ? Path.GetFileName(modFile) : string.Empty;
         }
+
+        // -----------------------------------------------------------------------
+        // RUNE emulator support
+        // -----------------------------------------------------------------------
+
+        // Maps raw interface version strings (from DLL scan) to their RUNE INI key.
+        // Longer prefixes are checked first to avoid partial matches
+        // (e.g. SteamMatchMakingServers before SteamMatchMaking).
+        private static readonly IReadOnlyList<(string Prefix, string Key)> _runePrefixMap =
+            new List<(string, string)>
+            {
+                ("STEAMAPPLIST_INTERFACE_VERSION",         "SteamAppList"),
+                ("STEAMAPPS_INTERFACE_VERSION",            "SteamApps"),
+                ("STEAMHTMLSURFACE_INTERFACE_VERSION_",    "SteamHTMLSurface"),
+                ("STEAMHTTP_INTERFACE_VERSION",            "SteamHTTP"),
+                ("STEAMINVENTORY_INTERFACE_V",             "SteamInventory"),
+                ("STEAMMUSICREMOTE_INTERFACE_VERSION",     "SteamMusicRemote"),
+                ("STEAMMUSIC_INTERFACE_VERSION",           "SteamMusic"),
+                ("STEAMPARENTALSETTINGS_INTERFACE_VERSION","SteamParentalSettings"),
+                ("STEAMREMOTEPLAY_INTERFACE_VERSION",      "SteamRemotePlay"),
+                ("STEAMREMOTESTORAGE_INTERFACE_VERSION",   "SteamRemoteStorage"),
+                ("STEAMSCREENSHOTS_INTERFACE_VERSION",     "SteamScreenshots"),
+                ("STEAMUGC_INTERFACE_VERSION",             "SteamUGC"),
+                ("STEAMUNIFIEDMESSAGES_INTERFACE_VERSION", null),
+                ("STEAMUSERSTATS_INTERFACE_VERSION",       "SteamUserStats"),
+                ("STEAMVIDEO_INTERFACE_V",                 "SteamVideo"),
+                ("STEAMCONTROLLER_INTERFACE_VERSION",      "SteamController"),
+                ("SteamMatchMakingServers",                "SteamMatchMakingServers"),
+                ("SteamMatchGameSearch",                   "SteamMatchGameSearch"),
+                ("SteamMatchMaking",                       "SteamMatchMaking"),
+                ("SteamGameServerStats",                   "SteamGameServerStats"),
+                ("SteamGameServer",                        "SteamGameServer"),
+                ("SteamController",                        "SteamController"),
+                ("SteamFriends",                           "SteamFriends"),
+                ("SteamNetworking",                        "SteamNetworking"),
+                ("SteamParties",                           "SteamParties"),
+                ("SteamInput",                             "SteamInput"),
+                ("SteamClient",                            "SteamClient"),
+                ("SteamUtils",                             "SteamUtils"),
+                ("SteamUser",                              "SteamUser"),
+            };
+
+        // Output order for the [Interfaces] section.
+        private static readonly IReadOnlyList<string> _runeInterfaceKeyOrder = new List<string>
+        {
+            "SteamApps", "SteamAppList", "SteamClient", "SteamController",
+            "SteamFriends", "SteamGameServer", "SteamGameServerStats",
+            "SteamHTMLSurface", "SteamHTTP", "SteamInput", "SteamInventory",
+            "SteamMatchGameSearch", "SteamMatchMaking", "SteamMatchMakingServers",
+            "SteamMusic", "SteamMusicRemote", "SteamNetworking",
+            "SteamParties", "SteamParentalSettings",
+            "SteamRemotePlay", "SteamRemoteStorage", "SteamScreenshots",
+            "SteamUGC", "SteamUser", "SteamUserStats", "SteamUtils", "SteamVideo",
+        };
+
+        private static string MapInterfaceToRuneKey(string interfaceVersion)
+        {
+            foreach (var (prefix, key) in _runePrefixMap)
+                if (interfaceVersion.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return key;
+            return null;
+        }
+
+        private string BuildRuneIni(int appId, long accountId, string userName, string language,
+            Dictionary<string, string> interfaceMap, List<DlcApp> dlcList, string crackSection)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("[Settings]");
+            sb.AppendLine($"AppId={appId}");
+            sb.AppendLine(accountId > 0 ? $"AccountId={accountId}" : "#AccountId=0");
+            sb.AppendLine($"UserName={userName}");
+            sb.AppendLine($"Language={language}");
+            sb.AppendLine("LobbyEnabled=1");
+            sb.AppendLine("Overlays=1");
+            sb.AppendLine("Offline=0");
+            sb.AppendLine("SelfProtect=0");
+            sb.AppendLine();
+
+            // Key=Value pairs in canonical order; only keys found in the DLL scan are written.
+            sb.AppendLine("[Interfaces]");
+            foreach (var key in _runeInterfaceKeyOrder)
+                if (interfaceMap.TryGetValue(key, out var value))
+                    sb.AppendLine($"{key}={value}");
+            sb.AppendLine();
+
+            sb.AppendLine("[DLC]");
+            sb.AppendLine("DLCUnlockall=0");
+            foreach (var dlc in dlcList.Where(d => d.Enabled))
+                sb.AppendLine($"{dlc.AppId}={dlc.Name}");
+            sb.AppendLine();
+
+            // Verbatim [Crack] section from the bundled template.
+            if (!string.IsNullOrEmpty(crackSection))
+                sb.Append(crackSection);
+
+            return sb.ToString();
+        }
+
+        // Extracts a raw INI section (header + lines) from file text, stopping at the next section.
+        private static string ExtractRawSection(string fileContent, string sectionName)
+        {
+            var sb = new StringBuilder();
+            bool inSection = false;
+            foreach (var rawLine in fileContent.Split('\n'))
+            {
+                var line = rawLine.TrimEnd('\r');
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("[") && trimmed.EndsWith("]"))
+                {
+                    if (inSection) break; // next section found — stop
+                    if (trimmed.Equals($"[{sectionName}]", StringComparison.OrdinalIgnoreCase))
+                        inSection = true;
+                }
+                if (inSection)
+                    sb.AppendLine(line);
+            }
+            return sb.ToString();
+        }
+
+        public async Task ApplyRune(string path, GoldbergConfiguration config,
+            string accountName, long steamId, string language)
+        {
+            _log.Info($"Applying RUNE to {path}...");
+
+            // Determine which DLL base name to work with
+            var has64 = File.Exists(Path.Combine(path, "steam_api64.dll")) ||
+                        File.Exists(Path.Combine(path, "steam_api64.rne")) ||
+                        File.Exists(Path.Combine(path, "steam_api64_o.dll"));
+            var dllBase = has64 ? "steam_api64" : "steam_api";
+
+            var currentDll = Path.Combine(path, $"{dllBase}.dll");
+            var rneDll     = Path.Combine(path, $"{dllBase}.rne");
+            var gbfBackup  = Path.Combine(path, $"{dllBase}_o.dll");
+            var runeSrcDll = Path.Combine(_runePath, $"{dllBase}.dll");
+
+            // If gbe_fork had replaced the DLL, restore the original first
+            if (File.Exists(gbfBackup))
+            {
+                DeleteIfExists(currentDll);
+                File.Move(gbfBackup, currentDll);
+                _log.Info($"Restored original {dllBase}.dll from gbe_fork backup.");
+            }
+            // Also remove any stale .GOLDBERGGUIBACKUP left behind
+            DeleteIfExists(Path.Combine(path, $".{dllBase}.dll.GOLDBERGGUIBACKUP"));
+
+            // Determine the DLL to scan (original game DLL)
+            string dllToScan =
+                File.Exists(rneDll)    ? rneDll :    // RUNE already applied
+                File.Exists(currentDll) ? currentDll : // fresh original
+                null;
+
+            // Scan the original game DLL and map each raw interface string to its RUNE INI key.
+            // Only the first occurrence per key is kept (mirrors USAP.exe behaviour).
+            var interfaceMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (dllToScan != null)
+            {
+                _log.Info($"Scanning interfaces from {dllToScan}...");
+                var raw = await ScanInterfacesFromDll(dllToScan).ConfigureAwait(false);
+                foreach (var iface in raw)
+                {
+                    var key = MapInterfaceToRuneKey(iface);
+                    if (key != null && !interfaceMap.ContainsKey(key))
+                        interfaceMap[key] = iface;
+                }
+                _log.Info($"Found {interfaceMap.Count} interface(s).");
+            }
+
+            // Backup original as .rne (first-time apply); on re-apply just overwrite the RUNE DLL
+            if (!File.Exists(rneDll) && File.Exists(currentDll))
+            {
+                File.Move(currentDll, rneDll);
+                _log.Info($"Backed up original {dllBase}.dll → {dllBase}.rne");
+            }
+            else
+            {
+                DeleteIfExists(currentDll); // remove existing RUNE dll before fresh copy
+            }
+
+            if (File.Exists(runeSrcDll))
+            {
+                File.Copy(runeSrcDll, currentDll);
+                _log.Info($"Copied RUNE {dllBase}.dll.");
+            }
+            else
+            {
+                _log.Error($"RUNE source DLL not found: {runeSrcDll}");
+            }
+
+            // Calculate 32-bit Steam account ID from Steam64 ID
+            const long steamIdBase = 76561197960265728L;
+            long accountId = steamId > steamIdBase ? steamId - steamIdBase : 0;
+
+            // Read [Crack] section verbatim from the bundled template.
+            var templatePath = Path.Combine(_runePath, "steam_emu.ini");
+            var crackSection = string.Empty;
+            if (File.Exists(templatePath))
+            {
+                var templateText = await File.ReadAllTextAsync(templatePath).ConfigureAwait(false);
+                crackSection = ExtractRawSection(templateText, "Crack");
+            }
+
+            var iniContent = BuildRuneIni(config.AppId, accountId, accountName, language,
+                interfaceMap, config.DlcList, crackSection);
+            await File.WriteAllTextAsync(Path.Combine(path, "steam_emu.ini"), iniContent)
+                .ConfigureAwait(false);
+            _log.Info("Wrote steam_emu.ini.");
+
+            // Always use the x32 steamstub — works for both 32-bit and 64-bit games.
+            var stubFile = Path.Combine(_steamstubPath, "steamstub_x32.dll");
+            var versionDll = Path.Combine(path, "version.dll");
+            if (File.Exists(stubFile))
+            {
+                File.Copy(stubFile, versionDll, true);
+                _log.Info("Copied steamstub → version.dll.");
+            }
+            else
+            {
+                _log.Error($"SteamStub not found: {stubFile}");
+            }
+
+            _log.Info("RUNE applied successfully.");
+        }
+
+        public async Task RevertRune(string path)
+        {
+            _log.Info($"Reverting RUNE in {path}...");
+            await Task.Run(() =>
+            {
+                foreach (var name in new[] { "steam_api64", "steam_api" })
+                {
+                    var currentDll = Path.Combine(path, $"{name}.dll");
+                    var rneDll     = Path.Combine(path, $"{name}.rne");
+                    if (File.Exists(rneDll))
+                    {
+                        DeleteIfExists(currentDll);
+                        File.Move(rneDll, currentDll);
+                        _log.Info($"Restored {name}.dll from .rne backup.");
+                    }
+                }
+                DeleteIfExists(Path.Combine(path, "steam_emu.ini"));
+                DeleteIfExists(Path.Combine(path, "version.dll"));
+            }).ConfigureAwait(false);
+            _log.Info("RUNE reverted.");
+        }
+
+        public bool RuneApplied(string path) =>
+            File.Exists(Path.Combine(path, "steam_emu.ini")) &&
+            (File.Exists(Path.Combine(path, "steam_api64.rne")) ||
+             File.Exists(Path.Combine(path, "steam_api.rne")));
 
     }
 }

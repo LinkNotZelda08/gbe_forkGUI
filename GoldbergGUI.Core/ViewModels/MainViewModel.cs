@@ -51,8 +51,10 @@ namespace GoldbergGUI.Core.ViewModels
         private string _statusText;
         private bool _mainWindowEnabled;
         private bool _goldbergApplied;
+        private bool _runeApplied;
         private bool _steamclientModeApplied;
         private bool _useSteamclientMode;
+        private bool _useRuneMode;
         private List<string> _customBroadcastIps = new List<string>();
         private string _steamclientGameDir; // folder where loader/ini were written (may differ from DLL dir)
         private bool _globalSteamclientPreference; // persisted preference, never overwritten by game switches
@@ -384,6 +386,36 @@ namespace GoldbergGUI.Core.ViewModels
         {
             get => _steamclientModeApplied;
             set { _steamclientModeApplied = value; RaisePropertyChanged(() => SteamclientModeApplied); }
+        }
+
+        public bool RuneApplied
+        {
+            get => _runeApplied;
+            set { _runeApplied = value; RaisePropertyChanged(() => RuneApplied); }
+        }
+
+        public bool UseRuneMode
+        {
+            get => _useRuneMode;
+            set
+            {
+                if (_useRuneMode == value) return;
+                _useRuneMode = value;
+                RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseGbeMode);
+                // Steamclient mode is incompatible with RUNE
+                if (value && _useSteamclientMode)
+                {
+                    _useSteamclientMode = false;
+                    RaisePropertyChanged(() => UseSteamclientMode);
+                }
+            }
+        }
+
+        public bool UseGbeMode
+        {
+            get => !_useRuneMode;
+            set => UseRuneMode = !value;
         }
 
         public bool UseSteamclientMode
@@ -779,14 +811,24 @@ namespace GoldbergGUI.Core.ViewModels
                 DisableOverlay       = DisableOverlay
             };
 
-            if (UseSteamclientMode)
+            if (UseRuneMode)
             {
+                // RUNE mode: clean up gbe_fork if present, then apply RUNE
+                if (_goldberg.GoldbergApplied(dirPath))
+                    await _goldberg.Revert(dirPath).ConfigureAwait(false);
+                await _goldberg.RevertSteamclientMode(GetSteamclientGameDir(dirPath)).ConfigureAwait(false);
+                _steamclientGameDir = null;
+                await _goldberg.ApplyRune(dirPath, config, AccountName, SteamId, SelectedLanguage)
+                    .ConfigureAwait(false);
+            }
+            else if (UseSteamclientMode)
+            {
+                // Clean up RUNE if present before applying gbe_fork steamclient mode
+                if (_goldberg.RuneApplied(dirPath))
+                    await _goldberg.RevertRune(dirPath).ConfigureAwait(false);
                 // Steamclient mode: restore original steam_api.dll, then set up loader
-                // First revert any direct DLL replacement
                 await _goldberg.RevertDllOnly(dirPath).ConfigureAwait(true);
-                // Save config files (steam_settings etc) without touching DLLs
                 await _goldberg.SaveConfigOnly(dirPath, config).ConfigureAwait(true);
-                // Ask for exe if ColdClientLoader.ini doesn't exist yet
                 if (!_goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath)))
                 {
                     var dialog = new OpenFileDialog
@@ -808,7 +850,6 @@ namespace GoldbergGUI.Core.ViewModels
                 }
                 else
                 {
-                    // Already set up — just update the AppId in the ini
                     var gameDir = GetSteamclientGameDir(dirPath);
                     _steamclientGameDir = gameDir;
                     await _goldberg.SetupSteamclientMode(gameDir,
@@ -817,19 +858,23 @@ namespace GoldbergGUI.Core.ViewModels
             }
             else
             {
-                // Normal mode: always remove any steamclient files from the correct gameDir,
-                // then apply directly to steam_api
+                // Normal gbe_fork mode: clean up RUNE if present, then apply gbe_fork
+                if (_goldberg.RuneApplied(dirPath))
+                    await _goldberg.RevertRune(dirPath).ConfigureAwait(false);
                 await _goldberg.RevertSteamclientMode(GetSteamclientGameDir(dirPath)).ConfigureAwait(false);
                 _steamclientGameDir = null;
                 await _goldberg.Save(dirPath, config).ConfigureAwait(false);
             }
 
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+            RuneApplied = _goldberg.RuneApplied(dirPath);
             SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
             MainWindowEnabled = true;
-            StatusText = UseSteamclientMode
-                ? "Saved! Launch the game via steamclient_loader_x64.exe (or x32). Ready."
-                : "Ready.";
+            StatusText = UseRuneMode
+                ? "Saved with RUNE! Launch via the game exe. Ready."
+                : UseSteamclientMode
+                    ? "Saved! Launch the game via steamclient_loader_x64.exe (or x32). Ready."
+                    : "Ready.";
         }
 
         private async Task RevertConfig()
@@ -856,11 +901,13 @@ namespace GoldbergGUI.Core.ViewModels
             {
                 var steamclientGameDir = GetSteamclientGameDir(dirPath);
                 await _goldberg.Revert(dirPath);
-                // Also clean up steamclient files from gameDir if it differs from dirPath
                 if (!string.Equals(steamclientGameDir, dirPath, StringComparison.OrdinalIgnoreCase))
                     await _goldberg.RevertSteamclientMode(steamclientGameDir);
+                if (_goldberg.RuneApplied(dirPath))
+                    await _goldberg.RevertRune(dirPath);
                 _steamclientGameDir = null;
                 GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+                RuneApplied = _goldberg.RuneApplied(dirPath);
                 SteamclientModeApplied = _goldberg.SteamclientModeApplied(dirPath);
 
                 AppId = -1;
@@ -875,10 +922,12 @@ namespace GoldbergGUI.Core.ViewModels
                 Offline = false;
                 DisableNetworking = false;
                 DisableOverlay = false;
-                // Reset backing field directly — do NOT use the property setter here as it
-                // would auto-save and wipe the user's global steamclient preference.
+                // Reset backing fields directly to avoid side-effects in setters.
                 _useSteamclientMode = false;
                 RaisePropertyChanged(() => UseSteamclientMode);
+                _useRuneMode = false;
+                RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseGbeMode);
                 StatusText = "Reverted successfully! Ready.";
             }
             catch (Exception ex)
@@ -1011,6 +1060,7 @@ namespace GoldbergGUI.Core.ViewModels
                     mod.SizeDisplay = size;
 
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
+            RuneApplied = _goldberg.RuneApplied(dirPath);
             SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
             // UseSteamclientMode is intentionally NOT updated here — it is a global preference
             // that persists across game switches and app restarts, and is only changed by the
