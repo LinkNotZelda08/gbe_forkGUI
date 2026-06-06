@@ -270,7 +270,18 @@ namespace GoldbergGUI.Core.Services
             }
             else
             {
-                _log.Info("\"steam_settings/achievements.json\" missing! Skipping...");
+                // RUNE mode: check for achievements.json cached in game root (written by ApplyRune)
+                var runeAchievementCache = Path.Combine(path, "achievements.json");
+                if (File.Exists(runeAchievementCache))
+                {
+                    _log.Info("Getting achievements from RUNE cache (root achievements.json)...");
+                    var json = await File.ReadAllTextAsync(runeAchievementCache).ConfigureAwait(false);
+                    achievementList = System.Text.Json.JsonSerializer.Deserialize<List<Achievement>>(json) ?? new List<Achievement>();
+                }
+                else
+                {
+                    _log.Info("\"steam_settings/achievements.json\" missing! Skipping...");
+                }
             }
 
             // DLC: prefer configs.app.ini, fall back to legacy DLC.txt
@@ -465,16 +476,102 @@ namespace GoldbergGUI.Core.Services
                 _log.Info($"Loaded {controllerSets.Count} controller action set(s).");
             }
 
+            // RUNE: read from steam_emu.ini if present
+            var runeControllerEnabled            = true;
+            var runeControllerRumble             = true;
+            var runeControllerSwapFaceButtons    = false;
+            var runeControllerRawInput           = false;
+            var runeControllerForceController    = string.Empty;
+            var runeControllerGlyphsFolder       = "rune_controller_glyphs";
+            var runeControllerLeftJoystickDz     = 10000;
+            var runeControllerRightJoystickDz    = 10000;
+            var runeControllerLeftTriggerDz      = 26000;
+            var runeControllerRightTriggerDz     = 26000;
+
+            var steamEmuIniPath = Path.Combine(path, "steam_emu.ini");
+            if (File.Exists(steamEmuIniPath))
+            {
+                await Task.Run(() =>
+                {
+                    var ini = ReadIniFile(steamEmuIniPath);
+
+                    // AppId from [Settings]
+                    if (appId <= 0 && ini.TryGetValue("Settings", out var settings) &&
+                        settings.TryGetValue("AppId", out var appIdStr) &&
+                        int.TryParse(appIdStr, out var parsedAppId))
+                        appId = parsedAppId;
+
+                    // DLC from [DLC] (only if not already loaded from gbe_fork)
+                    if (dlcList.Count == 0 && ini.TryGetValue("DLC", out var dlcSection))
+                        foreach (var kv in dlcSection)
+                            if (!kv.Key.Equals("DLCUnlockall", StringComparison.OrdinalIgnoreCase) &&
+                                int.TryParse(kv.Key, out var dlcId))
+                                dlcList.Add(new DlcApp { AppId = dlcId, Name = kv.Value, Enabled = true });
+
+                    // Achievements from [Achievements] (only if not already loaded)
+                    if (achievementList.Count == 0 && ini.TryGetValue("Achievements", out var achSection))
+                        foreach (var kv in achSection)
+                            achievementList.Add(new Achievement { Name = kv.Key, DisplayName = kv.Key });
+
+                    // Controller settings from [Controller]
+                    if (ini.TryGetValue("Controller", out var ctrl))
+                    {
+                        if (ctrl.TryGetValue("Enabled", out var en))
+                            runeControllerEnabled = en.Trim() != "0";
+                        if (ctrl.TryGetValue("Rumble", out var rum))
+                            runeControllerRumble = rum.Trim() != "0";
+                        runeControllerSwapFaceButtons = IniFlag(ctrl, "SwapFaceButtons");
+                        runeControllerRawInput        = IniFlag(ctrl, "RawInput");
+                        if (ctrl.TryGetValue("ForceController", out var force))
+                            runeControllerForceController = force.Trim();
+                        if (ctrl.TryGetValue("GlyphsFolder", out var glyphs))
+                            runeControllerGlyphsFolder = glyphs.Trim();
+                        if (ctrl.TryGetValue("LeftJoystickDeadzone", out var ljdz) && int.TryParse(ljdz, out var lj))
+                            runeControllerLeftJoystickDz = lj;
+                        if (ctrl.TryGetValue("RightJoystickDeadzone", out var rjdz) && int.TryParse(rjdz, out var rj))
+                            runeControllerRightJoystickDz = rj;
+                        if (ctrl.TryGetValue("LeftTriggerDeadzone", out var ltdz) && int.TryParse(ltdz, out var lt))
+                            runeControllerLeftTriggerDz = lt;
+                        if (ctrl.TryGetValue("RightTriggerDeadzone", out var rtdz) && int.TryParse(rtdz, out var rt))
+                            runeControllerRightTriggerDz = rt;
+
+                        // Action sets from ActionSets= and [Controller.SetName] sub-sections
+                        if (controllerSets.Count == 0 && ctrl.TryGetValue("ActionSets", out var actionSetsStr))
+                        {
+                            foreach (var setName in actionSetsStr.Split(',').Select(s => s.Trim()))
+                            {
+                                if (string.IsNullOrEmpty(setName)) continue;
+                                var bindings = new ObservableCollection<ControllerBinding>();
+                                if (ini.TryGetValue($"Controller.{setName}", out var bindSection))
+                                    foreach (var bkv in bindSection)
+                                        bindings.Add(new ControllerBinding { ActionName = bkv.Key, Binding = bkv.Value });
+                                controllerSets.Add(new ControllerActionSet { Name = setName, Bindings = bindings });
+                            }
+                        }
+                    }
+                }).ConfigureAwait(false);
+            }
+
             return new GoldbergConfiguration
             {
-                AppId                = appId,
-                Achievements         = achievementList,
-                DlcList              = dlcList,
-                Offline              = offline,
-                DisableNetworking    = disableNetworking,
-                DisableOverlay       = disableOverlay,
-                WorkshopMods         = modList,
-                ControllerActionSets = controllerSets
+                AppId                            = appId,
+                Achievements                     = achievementList,
+                DlcList                          = dlcList,
+                Offline                          = offline,
+                DisableNetworking                = disableNetworking,
+                DisableOverlay                   = disableOverlay,
+                WorkshopMods                     = modList,
+                ControllerActionSets             = controllerSets,
+                RuneControllerEnabled            = runeControllerEnabled,
+                RuneControllerRumble             = runeControllerRumble,
+                RuneControllerSwapFaceButtons    = runeControllerSwapFaceButtons,
+                RuneControllerRawInput           = runeControllerRawInput,
+                RuneControllerForceController    = runeControllerForceController,
+                RuneControllerGlyphsFolder       = runeControllerGlyphsFolder,
+                RuneControllerLeftJoystickDeadzone  = runeControllerLeftJoystickDz,
+                RuneControllerRightJoystickDeadzone = runeControllerRightJoystickDz,
+                RuneControllerLeftTriggerDeadzone   = runeControllerLeftTriggerDz,
+                RuneControllerRightTriggerDeadzone  = runeControllerRightTriggerDz,
             };
         }
 
@@ -1518,7 +1615,7 @@ namespace GoldbergGUI.Core.Services
         }
 
         private string BuildRuneIni(int appId, long accountId, string userName, string language,
-            Dictionary<string, string> interfaceMap, List<DlcApp> dlcList, string crackSection)
+            Dictionary<string, string> interfaceMap, GoldbergConfiguration config, string crackSection)
         {
             var sb = new StringBuilder();
             sb.AppendLine("[Settings]");
@@ -1541,9 +1638,52 @@ namespace GoldbergGUI.Core.Services
 
             sb.AppendLine("[DLC]");
             sb.AppendLine("DLCUnlockall=0");
-            foreach (var dlc in dlcList.Where(d => d.Enabled))
+            foreach (var dlc in config.DlcList.Where(d => d.Enabled))
                 sb.AppendLine($"{dlc.AppId}={dlc.Name}");
             sb.AppendLine();
+
+            // [Controller] section
+            sb.AppendLine("[Controller]");
+            sb.AppendLine($"Enabled={( config.RuneControllerEnabled ? "1" : "0")}");
+            if (!string.IsNullOrEmpty(config.RuneControllerForceController))
+                sb.AppendLine($"ForceController={config.RuneControllerForceController}");
+            sb.AppendLine($"Rumble={( config.RuneControllerRumble ? "1" : "0")}");
+            sb.AppendLine($"SwapFaceButtons={( config.RuneControllerSwapFaceButtons ? "1" : "0")}");
+            sb.AppendLine($"RawInput={( config.RuneControllerRawInput ? "1" : "0")}");
+            if (!string.IsNullOrEmpty(config.RuneControllerGlyphsFolder))
+                sb.AppendLine($"GlyphsFolder={config.RuneControllerGlyphsFolder}");
+            sb.AppendLine($"LeftJoystickDeadzone={config.RuneControllerLeftJoystickDeadzone}");
+            sb.AppendLine($"RightJoystickDeadzone={config.RuneControllerRightJoystickDeadzone}");
+            sb.AppendLine($"LeftTriggerDeadzone={config.RuneControllerLeftTriggerDeadzone}");
+            sb.AppendLine($"RightTriggerDeadzone={config.RuneControllerRightTriggerDeadzone}");
+            if (config.ControllerActionSets != null && config.ControllerActionSets.Count > 0)
+                sb.AppendLine($"ActionSets={string.Join(",", config.ControllerActionSets.Select(s => s.Name))}");
+            sb.AppendLine();
+
+            // [Controller.SetName] sections
+            if (config.ControllerActionSets != null)
+            {
+                foreach (var set in config.ControllerActionSets)
+                {
+                    if (string.IsNullOrWhiteSpace(set.Name)) continue;
+                    sb.AppendLine($"[Controller.{set.Name}]");
+                    if (set.Bindings != null)
+                        foreach (var binding in set.Bindings)
+                            if (!string.IsNullOrWhiteSpace(binding.ActionName))
+                                sb.AppendLine($"{binding.ActionName}={binding.Binding}");
+                    sb.AppendLine();
+                }
+            }
+
+            // [Achievements] whitelist
+            if (config.Achievements != null && config.Achievements.Count > 0)
+            {
+                sb.AppendLine("[Achievements]");
+                foreach (var ach in config.Achievements)
+                    if (!string.IsNullOrEmpty(ach.Name))
+                        sb.AppendLine($"{ach.Name}=1");
+                sb.AppendLine();
+            }
 
             // Verbatim [Crack] section from the bundled template.
             if (!string.IsNullOrEmpty(crackSection))
@@ -1656,10 +1796,30 @@ namespace GoldbergGUI.Core.Services
             }
 
             var iniContent = BuildRuneIni(config.AppId, accountId, accountName, language,
-                interfaceMap, config.DlcList, crackSection);
+                interfaceMap, config, crackSection);
             await File.WriteAllTextAsync(Path.Combine(path, "steam_emu.ini"), iniContent)
                 .ConfigureAwait(false);
             _log.Info("Wrote steam_emu.ini.");
+
+            // Cache full achievement data (friendly names, descriptions) so the GUI can show them on re-open.
+            // RUNE's steam_emu.ini only stores internal IDs; this file preserves the rich data.
+            var runeAchCachePath = Path.Combine(path, "achievements.json");
+            if (config.Achievements != null && config.Achievements.Count > 0)
+            {
+                var achJson = System.Text.Json.JsonSerializer.Serialize(
+                    config.Achievements,
+                    new System.Text.Json.JsonSerializerOptions
+                    {
+                        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                        WriteIndented = true
+                    });
+                await File.WriteAllTextAsync(runeAchCachePath, achJson).ConfigureAwait(false);
+                _log.Info("Cached achievements.json in game root.");
+            }
+            else
+            {
+                DeleteIfExists(runeAchCachePath);
+            }
 
             // Always use the x32 steamstub — works for both 32-bit and 64-bit games.
             var stubFile = Path.Combine(_steamstubPath, "steamstub_x32.dll");
@@ -1695,6 +1855,7 @@ namespace GoldbergGUI.Core.Services
                 }
                 DeleteIfExists(Path.Combine(path, "steam_emu.ini"));
                 DeleteIfExists(Path.Combine(path, "version.dll"));
+                DeleteIfExists(Path.Combine(path, "achievements.json"));
             }).ConfigureAwait(false);
             _log.Info("RUNE reverted.");
         }

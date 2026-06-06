@@ -114,8 +114,7 @@
                                     </Grid>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Achievements" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}"
-                                     Visibility="{Binding UseGbeMode, Converter={StaticResource B2V}}">
+                            <TabItem Header="Achievements" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
                                 <Grid Margin="0,10,0,10">
                                     <Grid.RowDefinitions>
                                         <RowDefinition/>
@@ -247,16 +246,97 @@
                                     </TextBlock>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Controller" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}"
-                                     Visibility="{Binding UseGbeMode, Converter={StaticResource B2V}}">
+                            <TabItem Header="Controller" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
                                 <Grid Margin="0,10,0,10">
                                     <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="*"/>
                                     </Grid.RowDefinitions>
 
+                                    <!-- ── RUNE Controller Settings (RUNE mode only) ────────── -->
+                                    <GroupBox Grid.Row="0"
+                                              Visibility="{Binding UseRuneMode, Converter={StaticResource B2V}}"
+                                              Margin="0,0,0,6" Padding="6,4"
+                                              Foreground="{DynamicResource ForegroundBrush}">
+                                        <GroupBox.Header>
+                                            <TextBlock Text="RUNE Controller Settings" Foreground="{DynamicResource ForegroundBrush}"/>
+                                        </GroupBox.Header>
+                                        <StackPanel>
+                                            <!-- Toggles -->
+                                            <WrapPanel Orientation="Horizontal" Margin="0,0,0,5">
+                                                <CheckBox Content="Enabled" IsChecked="{Binding RuneControllerEnabled, Mode=TwoWay}"
+                                                          VerticalContentAlignment="Center" Margin="0,0,16,0"/>
+                                                <CheckBox Content="Rumble" IsChecked="{Binding RuneControllerRumble, Mode=TwoWay}"
+                                                          VerticalContentAlignment="Center" Margin="0,0,16,0"/>
+                                                <CheckBox Content="Swap Face Buttons" IsChecked="{Binding RuneControllerSwapFaceButtons, Mode=TwoWay}"
+                                                          ToolTip="Nintendo layout: swaps A/B and X/Y. Enable for Switch Pro controllers."
+                                                          VerticalContentAlignment="Center" Margin="0,0,16,0"/>
+                                                <CheckBox Content="Raw Input (XInput only)" IsChecked="{Binding RuneControllerRawInput, Mode=TwoWay}"
+                                                          VerticalContentAlignment="Center"/>
+                                            </WrapPanel>
+                                            <!-- Force Controller + Glyphs Folder -->
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="120"/>
+                                                    <ColumnDefinition Width="10"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Force Controller:" VerticalAlignment="Center"
+                                                           Margin="0,0,6,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <ComboBox Grid.Column="1"
+                                                          ItemsSource="{Binding RuneControllerForceOptions}"
+                                                          SelectedItem="{Binding RuneControllerForceController, Mode=TwoWay}"
+                                                          ToolTip="Optionally force a specific controller type (affects shown glyphs)"/>
+                                                <TextBlock Grid.Column="3" Text="Glyphs Folder:" VerticalAlignment="Center"
+                                                           Margin="0,0,6,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <TextBox Grid.Column="4"
+                                                         Text="{Binding RuneControllerGlyphsFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="Folder name for controller glyphs, relative to steam_emu.ini"/>
+                                            </Grid>
+                                            <!-- Deadzone settings -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="65"/>
+                                                    <ColumnDefinition Width="10"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="65"/>
+                                                    <ColumnDefinition Width="10"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="65"/>
+                                                    <ColumnDefinition Width="10"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="65"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="L.Stick DZ:" VerticalAlignment="Center"
+                                                           Margin="0,0,4,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <TextBox Grid.Column="1"
+                                                         Text="{Binding RuneControllerLeftJoystickDeadzone, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="Left joystick deadzone (default 10000, max 32767)"/>
+                                                <TextBlock Grid.Column="3" Text="R.Stick DZ:" VerticalAlignment="Center"
+                                                           Margin="0,0,4,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <TextBox Grid.Column="4"
+                                                         Text="{Binding RuneControllerRightJoystickDeadzone, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="Right joystick deadzone (default 10000, max 32767)"/>
+                                                <TextBlock Grid.Column="6" Text="L.Trigger DZ:" VerticalAlignment="Center"
+                                                           Margin="0,0,4,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <TextBox Grid.Column="7"
+                                                         Text="{Binding RuneControllerLeftTriggerDeadzone, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="Left trigger deadzone for digital input (default 26000, max 32767)"/>
+                                                <TextBlock Grid.Column="9" Text="R.Trigger DZ:" VerticalAlignment="Center"
+                                                           Margin="0,0,4,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <TextBox Grid.Column="10"
+                                                         Text="{Binding RuneControllerRightTriggerDeadzone, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="Right trigger deadzone for digital input (default 26000, max 32767)"/>
+                                            </Grid>
+                                        </StackPanel>
+                                    </GroupBox>
+
                                     <!-- ── Fetch toolbar ─────────────────────────────────────── -->
-                                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                                    <Grid Grid.Row="1" Margin="0,0,0,8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
@@ -311,7 +391,7 @@
                                     </Grid>
 
                                     <!-- ── Action sets + bindings ────────────────────────────── -->
-                                    <Grid Grid.Row="1">
+                                    <Grid Grid.Row="2">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="180"/>
                                             <ColumnDefinition Width="*"/>

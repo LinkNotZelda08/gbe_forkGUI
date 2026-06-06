@@ -79,6 +79,18 @@ namespace GoldbergGUI.Core.Models
         public bool DisableOverlay { get; set; }
 
         public GoldbergGlobalConfiguration OverwrittenGlobalConfiguration { get; set; }
+
+        // RUNE-specific controller settings (written to [Controller] in steam_emu.ini)
+        public bool RuneControllerEnabled { get; set; } = true;
+        public bool RuneControllerRumble { get; set; } = true;
+        public bool RuneControllerSwapFaceButtons { get; set; } = false;
+        public bool RuneControllerRawInput { get; set; } = false;
+        public string RuneControllerForceController { get; set; } = string.Empty;
+        public string RuneControllerGlyphsFolder { get; set; } = "rune_controller_glyphs";
+        public int RuneControllerLeftJoystickDeadzone { get; set; } = 10000;
+        public int RuneControllerRightJoystickDeadzone { get; set; } = 10000;
+        public int RuneControllerLeftTriggerDeadzone { get; set; } = 26000;
+        public int RuneControllerRightTriggerDeadzone { get; set; } = 26000;
     }
 
     public class DlcApp : SteamApp, System.ComponentModel.INotifyPropertyChanged

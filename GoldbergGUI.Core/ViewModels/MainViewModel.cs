@@ -90,6 +90,17 @@ namespace GoldbergGUI.Core.ViewModels
         private IMvxCommand _fetchControllerConfigCommand;
         private IMvxCommand _fetchControllerByFileIdCommand;
         private string _controllerVdfFileId = string.Empty;
+        // RUNE controller settings
+        private bool _runeControllerEnabled = true;
+        private bool _runeControllerRumble = true;
+        private bool _runeControllerSwapFaceButtons = false;
+        private bool _runeControllerRawInput = false;
+        private string _runeControllerForceController = string.Empty;
+        private string _runeControllerGlyphsFolder = "rune_controller_glyphs";
+        private int _runeControllerLeftJoystickDeadzone = 10000;
+        private int _runeControllerRightJoystickDeadzone = 10000;
+        private int _runeControllerLeftTriggerDeadzone = 26000;
+        private int _runeControllerRightTriggerDeadzone = 26000;
 
         private static readonly Regex PasteDlcRegex = new Regex(@"(?<id>.*) *= *(?<n>.*)");
 
@@ -595,6 +606,73 @@ namespace GoldbergGUI.Core.ViewModels
         /// <summary>True when a Steam controller template was detected (shows the info banner).</summary>
         public bool ControllerTemplateVisible => !string.IsNullOrEmpty(_controllerTemplateName);
 
+        // -----------------------------------------------------------------------
+        // Properties — RUNE Controller Settings
+        // -----------------------------------------------------------------------
+
+        public static IReadOnlyList<string> RuneControllerForceOptions { get; } =
+            new[] { "", "Xbox360", "XboxOne", "PS3", "PS4", "PS5", "SwitchPro", "Generic" };
+
+        public bool RuneControllerEnabled
+        {
+            get => _runeControllerEnabled;
+            set { _runeControllerEnabled = value; RaisePropertyChanged(() => RuneControllerEnabled); }
+        }
+
+        public bool RuneControllerRumble
+        {
+            get => _runeControllerRumble;
+            set { _runeControllerRumble = value; RaisePropertyChanged(() => RuneControllerRumble); }
+        }
+
+        public bool RuneControllerSwapFaceButtons
+        {
+            get => _runeControllerSwapFaceButtons;
+            set { _runeControllerSwapFaceButtons = value; RaisePropertyChanged(() => RuneControllerSwapFaceButtons); }
+        }
+
+        public bool RuneControllerRawInput
+        {
+            get => _runeControllerRawInput;
+            set { _runeControllerRawInput = value; RaisePropertyChanged(() => RuneControllerRawInput); }
+        }
+
+        public string RuneControllerForceController
+        {
+            get => _runeControllerForceController;
+            set { _runeControllerForceController = value ?? string.Empty; RaisePropertyChanged(() => RuneControllerForceController); }
+        }
+
+        public string RuneControllerGlyphsFolder
+        {
+            get => _runeControllerGlyphsFolder;
+            set { _runeControllerGlyphsFolder = value ?? "rune_controller_glyphs"; RaisePropertyChanged(() => RuneControllerGlyphsFolder); }
+        }
+
+        public int RuneControllerLeftJoystickDeadzone
+        {
+            get => _runeControllerLeftJoystickDeadzone;
+            set { _runeControllerLeftJoystickDeadzone = value; RaisePropertyChanged(() => RuneControllerLeftJoystickDeadzone); }
+        }
+
+        public int RuneControllerRightJoystickDeadzone
+        {
+            get => _runeControllerRightJoystickDeadzone;
+            set { _runeControllerRightJoystickDeadzone = value; RaisePropertyChanged(() => RuneControllerRightJoystickDeadzone); }
+        }
+
+        public int RuneControllerLeftTriggerDeadzone
+        {
+            get => _runeControllerLeftTriggerDeadzone;
+            set { _runeControllerLeftTriggerDeadzone = value; RaisePropertyChanged(() => RuneControllerLeftTriggerDeadzone); }
+        }
+
+        public int RuneControllerRightTriggerDeadzone
+        {
+            get => _runeControllerRightTriggerDeadzone;
+            set { _runeControllerRightTriggerDeadzone = value; RaisePropertyChanged(() => RuneControllerRightTriggerDeadzone); }
+        }
+
         public bool SteamInterfacesTxtExists => DllSelected;
 
         /// <summary>True once the user has selected a real DLL path.</summary>
@@ -801,14 +879,24 @@ namespace GoldbergGUI.Core.ViewModels
 
             var config = new GoldbergConfiguration
             {
-                AppId                = AppId,
-                Achievements         = Achievements.ToList(),
-                DlcList              = DLCs.ToList(),
-                WorkshopMods         = WorkshopMods.ToList(),
-                ControllerActionSets = ControllerActionSets.ToList(),
-                Offline              = Offline,
-                DisableNetworking    = DisableNetworking,
-                DisableOverlay       = DisableOverlay
+                AppId                            = AppId,
+                Achievements                     = Achievements.ToList(),
+                DlcList                          = DLCs.ToList(),
+                WorkshopMods                     = WorkshopMods.ToList(),
+                ControllerActionSets             = ControllerActionSets.ToList(),
+                Offline                          = Offline,
+                DisableNetworking                = DisableNetworking,
+                DisableOverlay                   = DisableOverlay,
+                RuneControllerEnabled            = RuneControllerEnabled,
+                RuneControllerRumble             = RuneControllerRumble,
+                RuneControllerSwapFaceButtons    = RuneControllerSwapFaceButtons,
+                RuneControllerRawInput           = RuneControllerRawInput,
+                RuneControllerForceController    = RuneControllerForceController,
+                RuneControllerGlyphsFolder       = RuneControllerGlyphsFolder,
+                RuneControllerLeftJoystickDeadzone  = RuneControllerLeftJoystickDeadzone,
+                RuneControllerRightJoystickDeadzone = RuneControllerRightJoystickDeadzone,
+                RuneControllerLeftTriggerDeadzone   = RuneControllerLeftTriggerDeadzone,
+                RuneControllerRightTriggerDeadzone  = RuneControllerRightTriggerDeadzone,
             };
 
             if (UseRuneMode)
@@ -922,6 +1010,7 @@ namespace GoldbergGUI.Core.ViewModels
                 Offline = false;
                 DisableNetworking = false;
                 DisableOverlay = false;
+                ResetRuneControllerSettings();
                 // Reset backing fields directly to avoid side-effects in setters.
                 _useSteamclientMode = false;
                 RaisePropertyChanged(() => UseSteamclientMode);
@@ -1031,6 +1120,31 @@ namespace GoldbergGUI.Core.ViewModels
             Offline = false;
             DisableNetworking = false;
             DisableOverlay = false;
+            ResetRuneControllerSettings();
+        }
+
+        private void ResetRuneControllerSettings()
+        {
+            _runeControllerEnabled            = true;
+            _runeControllerRumble             = true;
+            _runeControllerSwapFaceButtons    = false;
+            _runeControllerRawInput           = false;
+            _runeControllerForceController    = string.Empty;
+            _runeControllerGlyphsFolder       = "rune_controller_glyphs";
+            _runeControllerLeftJoystickDeadzone  = 10000;
+            _runeControllerRightJoystickDeadzone = 10000;
+            _runeControllerLeftTriggerDeadzone   = 26000;
+            _runeControllerRightTriggerDeadzone  = 26000;
+            RaisePropertyChanged(() => RuneControllerEnabled);
+            RaisePropertyChanged(() => RuneControllerRumble);
+            RaisePropertyChanged(() => RuneControllerSwapFaceButtons);
+            RaisePropertyChanged(() => RuneControllerRawInput);
+            RaisePropertyChanged(() => RuneControllerForceController);
+            RaisePropertyChanged(() => RuneControllerGlyphsFolder);
+            RaisePropertyChanged(() => RuneControllerLeftJoystickDeadzone);
+            RaisePropertyChanged(() => RuneControllerRightJoystickDeadzone);
+            RaisePropertyChanged(() => RuneControllerLeftTriggerDeadzone);
+            RaisePropertyChanged(() => RuneControllerRightTriggerDeadzone);
         }
 
         private async Task ReadConfig()
@@ -1062,6 +1176,19 @@ namespace GoldbergGUI.Core.ViewModels
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
             RuneApplied = _goldberg.RuneApplied(dirPath);
             SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
+            // Auto-detect emulator mode from what is currently applied in the game directory
+            if (_goldberg.RuneApplied(dirPath))
+            {
+                _useRuneMode = true;
+                RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseGbeMode);
+            }
+            else if (_goldberg.GoldbergApplied(dirPath) || _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath)))
+            {
+                _useRuneMode = false;
+                RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseGbeMode);
+            }
             // UseSteamclientMode is intentionally NOT updated here — it is a global preference
             // that persists across game switches and app restarts, and is only changed by the
             // user manually toggling the Global Settings checkbox.
@@ -1084,6 +1211,16 @@ namespace GoldbergGUI.Core.ViewModels
             Offline = config.Offline;
             DisableNetworking = config.DisableNetworking;
             DisableOverlay = config.DisableOverlay;
+            RuneControllerEnabled            = config.RuneControllerEnabled;
+            RuneControllerRumble             = config.RuneControllerRumble;
+            RuneControllerSwapFaceButtons    = config.RuneControllerSwapFaceButtons;
+            RuneControllerRawInput           = config.RuneControllerRawInput;
+            RuneControllerForceController    = config.RuneControllerForceController;
+            RuneControllerGlyphsFolder       = config.RuneControllerGlyphsFolder;
+            RuneControllerLeftJoystickDeadzone  = config.RuneControllerLeftJoystickDeadzone;
+            RuneControllerRightJoystickDeadzone = config.RuneControllerRightJoystickDeadzone;
+            RuneControllerLeftTriggerDeadzone   = config.RuneControllerLeftTriggerDeadzone;
+            RuneControllerRightTriggerDeadzone  = config.RuneControllerRightTriggerDeadzone;
         }
 
         private bool GetDllPathDir(out string dirPath)
