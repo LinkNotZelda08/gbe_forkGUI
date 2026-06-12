@@ -690,7 +690,8 @@ namespace GoldbergGUI.Core.ViewModels
             FileVersionInfo.GetVersionInfo(
                 Environment.ProcessPath ?? Assembly.GetExecutingAssembly().Location).FileVersion;
 
-        public static GlobalHelp G => new GlobalHelp();
+        private static readonly GlobalHelp _globalHelp = new GlobalHelp();
+        public static GlobalHelp G => _globalHelp;
 
         // -----------------------------------------------------------------------
         // Commands

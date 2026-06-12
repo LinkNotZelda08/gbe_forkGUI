@@ -119,10 +119,7 @@ namespace GoldbergGUI.Core.Services
 
             _log = log;
             _db = new SQLiteAsyncConnection(Database);
-            //_db.CreateTable<SteamApp>();
-            await _db.CreateTableAsync<SteamApp>()
-                //.ContinueWith(x => _log.Debug("Table success!"))
-                .ConfigureAwait(false);
+            await _db.CreateTableAsync<SteamApp>().ConfigureAwait(false);
 
             var countAsync = await _db.Table<SteamApp>().CountAsync().ConfigureAwait(false);
             if (DateTime.Now.Subtract(File.GetLastWriteTimeUtc(Database)).TotalDays >= 1 || countAsync == 0)
@@ -134,27 +131,24 @@ namespace GoldbergGUI.Core.Services
                         _log.Info($"Updating cache ({appType})...");
                         bool haveMoreResults;
                         long lastAppId = 0;
-                        var cacheRaw = new HashSet<SteamApp>();
+                        var cache = new HashSet<SteamApp>();
                         do
                         {
-                            var response = lastAppId > 0
-                                ? await _httpClient.GetAsync($"{steamCache.SteamUri}&last_appid={lastAppId}")
-                                    .ConfigureAwait(false)
-                                : await _httpClient.GetAsync(steamCache.SteamUri).ConfigureAwait(false);
+                            var uri = lastAppId > 0
+                                ? $"{steamCache.SteamUri}&last_appid={lastAppId}"
+                                : steamCache.SteamUri;
+                            var response = await _httpClient.GetAsync(uri).ConfigureAwait(false);
                             var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                             var steamApps = DeserializeSteamApps(steamCache.ApiVersion, responseBody);
-                            foreach (var appListApp in steamApps.AppList.Apps) cacheRaw.Add(appListApp);
+                            foreach (var app in steamApps.AppList.Apps)
+                            {
+                                app.AppType = steamCache.SteamAppType;
+                                app.ComparableName = PrepareStringToCompare(app.Name);
+                                cache.Add(app);
+                            }
                             haveMoreResults = steamApps.AppList.HaveMoreResults;
                             lastAppId = steamApps.AppList.LastAppid;
                         } while (haveMoreResults);
-
-                        var cache = new HashSet<SteamApp>();
-                        foreach (var steamApp in cacheRaw)
-                        {
-                            steamApp.AppType = steamCache.SteamAppType;
-                            steamApp.ComparableName = PrepareStringToCompare(steamApp.Name);
-                            cache.Add(steamApp);
-                        }
 
                         await _db.InsertAllAsync(cache, "OR IGNORE").ConfigureAwait(false);
                     }
@@ -226,8 +220,7 @@ namespace GoldbergGUI.Core.Services
             if (steamApp != null)
             {
                 _log.Info($"Get DLC for App {steamApp}");
-                var task = AppDetails.GetAsync(steamApp.AppId);
-                var steamAppDetails = await task.ConfigureAwait(true);
+                var steamAppDetails = await AppDetails.GetAsync(steamApp.AppId).ConfigureAwait(true);
                 if (steamAppDetails.Type == AppTypeGame)
                 {
                     foreach (var x in steamAppDetails.DLC)
@@ -254,14 +247,10 @@ namespace GoldbergGUI.Core.Services
                         var steamDbUri = new Uri($"https://steamdb.info/app/{steamApp.AppId}/dlc/");
 
                         _log.Info($"Get SteamDB App {steamApp}");
-                        var httpCall = _httpClient.GetAsync(steamDbUri);
-                        var response = await httpCall.ConfigureAwait(false);
-                        _log.Debug(httpCall.Status.ToString());
-                        _log.Debug(response.EnsureSuccessStatusCode().ToString());
+                        var response = await _httpClient.GetAsync(steamDbUri).ConfigureAwait(false);
+                        response.EnsureSuccessStatusCode();
 
-                        var readAsStringAsync = response.Content.ReadAsStringAsync();
-                        var responseBody = await readAsStringAsync.ConfigureAwait(false);
-                        _log.Debug(readAsStringAsync.Status.ToString());
+                        var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                         var parser = new HtmlParser();
                         var doc = parser.ParseDocument(responseBody);
@@ -409,15 +398,8 @@ namespace GoldbergGUI.Core.Services
                 (fileIds, templateIndex) = await ScrapeControllerConfigFromSteamDb(appId).ConfigureAwait(false);
             }
 
-            foreach (var fid in fileIds)
-            {
-                var sets = await GetControllerActionSetsByFileId(fid).ConfigureAwait(false);
-                if (sets.Count > 0)
-                {
-                    _log.Info($"[GetControllerConfig] Got {sets.Count} action set(s) from file {fid}.");
-                    return (sets, null, null);
-                }
-            }
+            var found = await TryGetSetsFromIds(fileIds).ConfigureAwait(false);
+            if (found != null) return (found, null, null);
 
             // If a template index was found (and no custom VDF parsed successfully), return it
             if (templateIndex.HasValue)
@@ -432,29 +414,15 @@ namespace GoldbergGUI.Core.Services
             foreach (var ctType in new[] { "controller_xbox360", "controller_xboxone" })
             {
                 var qfIds = await QueryControllerFileIds(appId, ctType).ConfigureAwait(false);
-                foreach (var fid in qfIds)
-                {
-                    var sets = await GetControllerActionSetsByFileId(fid).ConfigureAwait(false);
-                    if (sets.Count > 0)
-                    {
-                        _log.Info($"[GetControllerConfig] Got {sets.Count} action set(s) via QueryFiles[{ctType}] file {fid}.");
-                        return (sets, null, null);
-                    }
-                }
+                found = await TryGetSetsFromIds(qfIds).ConfigureAwait(false);
+                if (found != null) return (found, null, null);
             }
 
             // ── 4. QueryFiles API — broad (any game-managed file, no tag filter) ─────
             _log.Info($"[GetControllerConfig] Trying QueryFiles (broad) for app {appId}...");
             var broadIds = await QueryControllerFileIdsBroad(appId).ConfigureAwait(false);
-            foreach (var fid in broadIds)
-            {
-                var sets = await GetControllerActionSetsByFileId(fid).ConfigureAwait(false);
-                if (sets.Count > 0)
-                {
-                    _log.Info($"[GetControllerConfig] Got {sets.Count} action set(s) via QueryFiles[broad] file {fid}.");
-                    return (sets, null, null);
-                }
-            }
+            found = await TryGetSetsFromIds(broadIds).ConfigureAwait(false);
+            if (found != null) return (found, null, null);
 
             // ── 5. Steam Store API — detect games with native controller support ──────
             var supportLevel = await GetControllerSupportFromSteamStore(appId).ConfigureAwait(false);
@@ -644,17 +612,16 @@ namespace GoldbergGUI.Core.Services
         {
             switch (type)
             {
-                case 0x02: AppInfoReadCString(br); break;        // string
-                case 0x03: br.ReadInt32(); break;                 // int32
-                case 0x04: br.ReadSingle(); break;                // float
-                case 0x05: br.ReadInt32(); break;                 // pointer
-                case 0x06: AppInfoReadWString(br); break;         // wstring
-                case 0x07: br.ReadUInt32(); break;                // color
-                case 0x08: br.ReadUInt64(); break;                // uint64
-                case 0x0A: br.ReadUInt64(); break;                // uint64 alt
-                case 0x0B: br.ReadInt64(); break;                 // int64
+                case 0x02: AppInfoReadCString(br); break;   // string
+                case 0x03:
+                case 0x05: br.ReadInt32(); break;           // int32, pointer
+                case 0x04: br.ReadSingle(); break;          // float
+                case 0x06: AppInfoReadWString(br); break;   // wstring
+                case 0x07: br.ReadUInt32(); break;          // color
+                case 0x08:
+                case 0x0A: br.ReadUInt64(); break;          // uint64, uint64 alt
+                case 0x0B: br.ReadInt64(); break;           // int64
             }
-            // Unknown types: skip nothing (will likely de-sync, but won't crash)
         }
 
         private static string AppInfoReadCString(BinaryReader br)
@@ -702,21 +669,7 @@ namespace GoldbergGUI.Core.Services
 
                 using var doc = JsonDocument.Parse(body);
                 if (!doc.RootElement.TryGetProperty("response", out var resp)) return ids;
-                if (!resp.TryGetProperty("publishedfiledetails", out var arr) &&
-                    !resp.TryGetProperty("publishedfileids",     out arr))
-                    return ids;
-                if (arr.ValueKind != JsonValueKind.Array) return ids;
-
-                foreach (var elem in arr.EnumerateArray())
-                {
-                    string idStr = null;
-                    if (elem.ValueKind == JsonValueKind.Object &&
-                        elem.TryGetProperty("publishedfileid", out var fp))
-                        idStr = fp.GetString();
-                    else if (elem.ValueKind == JsonValueKind.String)
-                        idStr = elem.GetString();
-                    if (long.TryParse(idStr, out var id) && id > 0) ids.Add(id);
-                }
+                return ParsePublishedFileIdsFromResponse(resp);
             }
             catch (Exception e)
             {
@@ -907,7 +860,10 @@ namespace GoldbergGUI.Core.Services
             {
                 var vdfContent = await DownloadPublishedFileContent(publishedFileId).ConfigureAwait(false);
                 if (string.IsNullOrEmpty(vdfContent)) return new List<ControllerActionSet>();
-                return VdfControllerParser.Parse(vdfContent);
+                var sets = VdfControllerParser.Parse(vdfContent);
+                if (sets.Count > 0)
+                    _log.Info($"Parsed {sets.Count} action set(s) from file {publishedFileId}.");
+                return sets;
             }
             catch (Exception e)
             {
@@ -916,9 +872,40 @@ namespace GoldbergGUI.Core.Services
             }
         }
 
+        private async Task<List<ControllerActionSet>> TryGetSetsFromIds(IEnumerable<long> ids)
+        {
+            foreach (var fid in ids)
+            {
+                var sets = await GetControllerActionSetsByFileId(fid).ConfigureAwait(false);
+                if (sets.Count > 0) return sets;
+            }
+            return null;
+        }
+
         // -----------------------------------------------------------------------
         // Controller VDF helpers
         // -----------------------------------------------------------------------
+
+        private static List<long> ParsePublishedFileIdsFromResponse(JsonElement response)
+        {
+            var ids = new List<long>();
+            if (!response.TryGetProperty("publishedfiledetails", out var arr) &&
+                !response.TryGetProperty("publishedfileids", out arr))
+                return ids;
+            if (arr.ValueKind != JsonValueKind.Array) return ids;
+
+            foreach (var elem in arr.EnumerateArray())
+            {
+                string idStr = null;
+                if (elem.ValueKind == JsonValueKind.Object &&
+                    elem.TryGetProperty("publishedfileid", out var fp))
+                    idStr = fp.GetString();
+                else if (elem.ValueKind == JsonValueKind.String)
+                    idStr = elem.GetString();
+                if (long.TryParse(idStr, out var id) && id > 0) ids.Add(id);
+            }
+            return ids;
+        }
 
         /// <summary>
         /// Queries IPublishedFileService/QueryFiles for game-managed files whose
@@ -946,24 +933,7 @@ namespace GoldbergGUI.Core.Services
 
                 using var doc = JsonDocument.Parse(body);
                 if (!doc.RootElement.TryGetProperty("response", out var resp)) return ids;
-
-                // return_details=1 → "publishedfiledetails"; older/fallback → "publishedfileids"
-                if (!resp.TryGetProperty("publishedfiledetails", out var arr) &&
-                    !resp.TryGetProperty("publishedfileids",     out arr))
-                    return ids;
-                if (arr.ValueKind != JsonValueKind.Array) return ids;
-
-                foreach (var elem in arr.EnumerateArray())
-                {
-                    string idStr = null;
-                    if (elem.ValueKind == JsonValueKind.Object &&
-                        elem.TryGetProperty("publishedfileid", out var fp))
-                        idStr = fp.GetString();
-                    else if (elem.ValueKind == JsonValueKind.String)
-                        idStr = elem.GetString();
-
-                    if (long.TryParse(idStr, out var id) && id > 0) ids.Add(id);
-                }
+                return ParsePublishedFileIdsFromResponse(resp);
             }
             catch (Exception e)
             {
