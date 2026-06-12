@@ -1821,8 +1821,8 @@ namespace GoldbergGUI.Core.Services
                 DeleteIfExists(runeAchCachePath);
             }
 
-            // Always use the x32 steamstub — works for both 32-bit and 64-bit games.
-            var stubFile = Path.Combine(_steamstubPath, "steamstub_x32.dll");
+            var stubFileName = has64 ? "steamstub_x64.dll" : "steamstub_x32.dll";
+            var stubFile = Path.Combine(_steamstubPath, stubFileName);
             var versionDll = Path.Combine(path, "version.dll");
             if (File.Exists(stubFile))
             {
