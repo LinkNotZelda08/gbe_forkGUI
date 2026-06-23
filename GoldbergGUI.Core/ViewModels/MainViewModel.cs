@@ -52,12 +52,15 @@ namespace GoldbergGUI.Core.ViewModels
         private bool _mainWindowEnabled;
         private bool _goldbergApplied;
         private bool _runeApplied;
+        private bool _ali213Applied;
         private bool _steamclientModeApplied;
         private bool _useSteamclientMode;
         private bool _useRuneMode;
+        private bool _useAli213Mode;
         private List<string> _customBroadcastIps = new List<string>();
         private string _steamclientGameDir; // folder where loader/ini were written (may differ from DLL dir)
         private bool _globalSteamclientPreference; // persisted preference, never overwritten by game switches
+        private bool _downloadAchievementImages = true;
         private ObservableCollection<string> _steamLanguages;
         private string _selectedLanguage;
         private ObservableCollection<string> _themes;
@@ -101,6 +104,14 @@ namespace GoldbergGUI.Core.ViewModels
         private int _runeControllerRightJoystickDeadzone = 10000;
         private int _runeControllerLeftTriggerDeadzone = 26000;
         private int _runeControllerRightTriggerDeadzone = 26000;
+        // ALI213 settings
+        private int  _ali213SaveType          = 0;
+        private bool _ali213Online            = false;
+        private int  _ali213AchievementsCount = 0;
+        private bool _ali213IsLoggedOn        = false;
+        private bool _ali213FullBlockNetwork  = false;
+        private bool _ali213FileRedirectCheck = false;
+        private int  _ali213DecryptSteamStub  = 1;
 
         private static readonly Regex PasteDlcRegex = new Regex(@"(?<id>.*) *= *(?<n>.*)");
 
@@ -154,6 +165,8 @@ namespace GoldbergGUI.Core.ViewModels
                     // Set backing field directly on init to avoid triggering auto-save
                     _useSteamclientMode = _globalSteamclientPreference;
                     RaisePropertyChanged(() => UseSteamclientMode);
+                    _downloadAchievementImages = globalConfig.DownloadAchievementImages;
+                    RaisePropertyChanged(() => DownloadAchievementImages);
                 }
                 catch (Exception e)
                 {
@@ -377,6 +390,12 @@ namespace GoldbergGUI.Core.ViewModels
             set { _disableOverlay = value; RaisePropertyChanged(() => DisableOverlay); }
         }
 
+        public bool DownloadAchievementImages
+        {
+            get => _downloadAchievementImages;
+            set { _downloadAchievementImages = value; RaisePropertyChanged(() => DownloadAchievementImages); }
+        }
+
         // -----------------------------------------------------------------------
         // Properties — UI state
         // -----------------------------------------------------------------------
@@ -405,6 +424,12 @@ namespace GoldbergGUI.Core.ViewModels
             set { _runeApplied = value; RaisePropertyChanged(() => RuneApplied); }
         }
 
+        public bool Ali213Applied
+        {
+            get => _ali213Applied;
+            set { _ali213Applied = value; RaisePropertyChanged(() => Ali213Applied); }
+        }
+
         public bool UseRuneMode
         {
             get => _useRuneMode;
@@ -412,8 +437,11 @@ namespace GoldbergGUI.Core.ViewModels
             {
                 if (_useRuneMode == value) return;
                 _useRuneMode = value;
+                if (value) _useAli213Mode = false;
                 RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseAli213Mode);
                 RaisePropertyChanged(() => UseGbeMode);
+                RaisePropertyChanged(() => NonAli213TabsVisible);
                 // Steamclient mode is incompatible with RUNE
                 if (value && _useSteamclientMode)
                 {
@@ -423,10 +451,44 @@ namespace GoldbergGUI.Core.ViewModels
             }
         }
 
+        public bool UseAli213Mode
+        {
+            get => _useAli213Mode;
+            set
+            {
+                if (_useAli213Mode == value) return;
+                _useAli213Mode = value;
+                if (value) _useRuneMode = false;
+                RaisePropertyChanged(() => UseAli213Mode);
+                RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseGbeMode);
+                RaisePropertyChanged(() => NonAli213TabsVisible);
+                // Steamclient mode is incompatible with ALI213
+                if (value && _useSteamclientMode)
+                {
+                    _useSteamclientMode = false;
+                    RaisePropertyChanged(() => UseSteamclientMode);
+                }
+            }
+        }
+
+        /// <summary>True when not in ALI213 mode — used to hide Achievements and Controller tabs.</summary>
+        public bool NonAli213TabsVisible => !_useAli213Mode;
+
         public bool UseGbeMode
         {
-            get => !_useRuneMode;
-            set => UseRuneMode = !value;
+            get => !_useRuneMode && !_useAli213Mode;
+            set
+            {
+                if (!value) return;
+                if (!_useRuneMode && !_useAli213Mode) return;
+                _useRuneMode = false;
+                _useAli213Mode = false;
+                RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseAli213Mode);
+                RaisePropertyChanged(() => UseGbeMode);
+                RaisePropertyChanged(() => NonAli213TabsVisible);
+            }
         }
 
         public bool UseSteamclientMode
@@ -458,11 +520,12 @@ namespace GoldbergGUI.Core.ViewModels
         private Task PersistGlobalSteamclientPreference() =>
             _goldberg.SetGlobalSettings(new GoldbergGlobalConfiguration
             {
-                AccountName             = AccountName,
-                UserSteamId             = SteamId,
-                Language                = SelectedLanguage,
-                CustomBroadcastIps      = _customBroadcastIps,
-                UseSteamclientMode = _globalSteamclientPreference,
+                AccountName               = AccountName,
+                UserSteamId               = SteamId,
+                Language                  = SelectedLanguage,
+                CustomBroadcastIps        = _customBroadcastIps,
+                UseSteamclientMode        = _globalSteamclientPreference,
+                DownloadAchievementImages = _downloadAchievementImages,
             });
 
         public string StatusText
@@ -673,6 +736,72 @@ namespace GoldbergGUI.Core.ViewModels
             set { _runeControllerRightTriggerDeadzone = value; RaisePropertyChanged(() => RuneControllerRightTriggerDeadzone); }
         }
 
+        // -----------------------------------------------------------------------
+        // Properties — ALI213 Settings
+        // -----------------------------------------------------------------------
+
+        public record Ali213Option(int Value, string Display);
+
+        public static IReadOnlyList<Ali213Option> Ali213SaveTypeOptions { get; } = new Ali213Option[]
+        {
+            new(0, "0 – VALVE (game dir)"),
+            new(1, "1 – VALVE (My Documents)"),
+            new(4, "4 – RELOADED"),
+            new(5, "5 – SKIDROW"),
+            new(6, "6 – FLT"),
+            new(7, "7 – CODEX (3.0.4+ / My Documents)"),
+            new(8, "8 – CODEX (1.0.0.0+ / AppData)"),
+        };
+
+        public static IReadOnlyList<Ali213Option> Ali213DecryptOptions { get; } = new Ali213Option[]
+        {
+            new(0, "0 – Disabled"),
+            new(1, "1 – steam_api(64).dll decrypts stub"),
+            new(2, "2 – SteamClient.dll decrypts stub"),
+        };
+
+        public int Ali213SaveType
+        {
+            get => _ali213SaveType;
+            set { _ali213SaveType = value; RaisePropertyChanged(() => Ali213SaveType); }
+        }
+
+        public bool Ali213Online
+        {
+            get => _ali213Online;
+            set { _ali213Online = value; RaisePropertyChanged(() => Ali213Online); }
+        }
+
+        public int Ali213AchievementsCount
+        {
+            get => _ali213AchievementsCount;
+            set { _ali213AchievementsCount = value; RaisePropertyChanged(() => Ali213AchievementsCount); }
+        }
+
+        public bool Ali213IsLoggedOn
+        {
+            get => _ali213IsLoggedOn;
+            set { _ali213IsLoggedOn = value; RaisePropertyChanged(() => Ali213IsLoggedOn); }
+        }
+
+        public bool Ali213FullBlockNetwork
+        {
+            get => _ali213FullBlockNetwork;
+            set { _ali213FullBlockNetwork = value; RaisePropertyChanged(() => Ali213FullBlockNetwork); }
+        }
+
+        public bool Ali213FileRedirectCheck
+        {
+            get => _ali213FileRedirectCheck;
+            set { _ali213FileRedirectCheck = value; RaisePropertyChanged(() => Ali213FileRedirectCheck); }
+        }
+
+        public int Ali213DecryptSteamStub
+        {
+            get => _ali213DecryptSteamStub;
+            set { _ali213DecryptSteamStub = value; RaisePropertyChanged(() => Ali213DecryptSteamStub); }
+        }
+
         public bool SteamInterfacesTxtExists => DllSelected;
 
         /// <summary>True once the user has selected a real DLL path.</summary>
@@ -860,11 +989,12 @@ namespace GoldbergGUI.Core.ViewModels
             _globalSteamclientPreference = UseSteamclientMode;
             await _goldberg.SetGlobalSettings(new GoldbergGlobalConfiguration
             {
-                AccountName             = AccountName,
-                UserSteamId             = SteamId,
-                Language                = SelectedLanguage,
-                CustomBroadcastIps      = _customBroadcastIps,
-                UseSteamclientMode = _globalSteamclientPreference,
+                AccountName               = AccountName,
+                UserSteamId               = SteamId,
+                Language                  = SelectedLanguage,
+                CustomBroadcastIps        = _customBroadcastIps,
+                UseSteamclientMode        = _globalSteamclientPreference,
+                DownloadAchievementImages = _downloadAchievementImages,
             }).ConfigureAwait(false);
 
             if (!DllSelected)
@@ -888,6 +1018,13 @@ namespace GoldbergGUI.Core.ViewModels
                 Offline                          = Offline,
                 DisableNetworking                = DisableNetworking,
                 DisableOverlay                   = DisableOverlay,
+                Ali213SaveType          = Ali213SaveType,
+                Ali213Online            = Ali213Online,
+                Ali213AchievementsCount = Ali213AchievementsCount,
+                Ali213IsLoggedOn        = Ali213IsLoggedOn,
+                Ali213FullBlockNetwork  = Ali213FullBlockNetwork,
+                Ali213FileRedirectCheck = Ali213FileRedirectCheck,
+                Ali213DecryptSteamStub  = Ali213DecryptSteamStub,
                 RuneControllerEnabled            = RuneControllerEnabled,
                 RuneControllerRumble             = RuneControllerRumble,
                 RuneControllerSwapFaceButtons    = RuneControllerSwapFaceButtons,
@@ -915,19 +1052,35 @@ namespace GoldbergGUI.Core.ViewModels
 
             if (UseRuneMode)
             {
-                // RUNE mode: clean up gbe_fork if present, then apply RUNE
+                // RUNE mode: clean up gbe_fork and ALI213 if present, then apply RUNE
                 if (_goldberg.GoldbergApplied(dirPath))
                     await _goldberg.Revert(dirPath).ConfigureAwait(false);
+                if (_goldberg.Ali213Applied(dirPath))
+                    await _goldberg.RevertAli213(dirPath).ConfigureAwait(false);
                 await _goldberg.RevertSteamclientMode(GetSteamclientGameDir(dirPath)).ConfigureAwait(false);
                 _steamclientGameDir = null;
                 await _goldberg.ApplyRune(dirPath, config, AccountName, SteamId, SelectedLanguage)
                     .ConfigureAwait(false);
             }
-            else if (UseSteamclientMode)
+            else if (UseAli213Mode)
             {
-                // Clean up RUNE and normal gbe_fork if present before applying steamclient mode
+                // ALI213 mode: clean up gbe_fork and RUNE if present, then apply ALI213
+                if (_goldberg.GoldbergApplied(dirPath))
+                    await _goldberg.Revert(dirPath).ConfigureAwait(false);
                 if (_goldberg.RuneApplied(dirPath))
                     await _goldberg.RevertRune(dirPath).ConfigureAwait(false);
+                await _goldberg.RevertSteamclientMode(GetSteamclientGameDir(dirPath)).ConfigureAwait(false);
+                _steamclientGameDir = null;
+                await _goldberg.ApplyAli213(dirPath, config, AccountName, SteamId, SelectedLanguage)
+                    .ConfigureAwait(false);
+            }
+            else if (UseSteamclientMode)
+            {
+                // Clean up RUNE, ALI213, and normal gbe_fork if present before applying steamclient mode
+                if (_goldberg.RuneApplied(dirPath))
+                    await _goldberg.RevertRune(dirPath).ConfigureAwait(false);
+                if (_goldberg.Ali213Applied(dirPath))
+                    await _goldberg.RevertAli213(dirPath).ConfigureAwait(false);
                 if (_goldberg.GoldbergApplied(dirPath))
                     await _goldberg.Revert(dirPath).ConfigureAwait(false);
                 else
@@ -965,9 +1118,11 @@ namespace GoldbergGUI.Core.ViewModels
             }
             else
             {
-                // Normal gbe_fork mode: clean up RUNE if present, then apply gbe_fork
+                // Normal gbe_fork mode: clean up RUNE and ALI213 if present, then apply gbe_fork
                 if (_goldberg.RuneApplied(dirPath))
                     await _goldberg.RevertRune(dirPath).ConfigureAwait(false);
+                if (_goldberg.Ali213Applied(dirPath))
+                    await _goldberg.RevertAli213(dirPath).ConfigureAwait(false);
                 await _goldberg.RevertSteamclientMode(GetSteamclientGameDir(dirPath)).ConfigureAwait(false);
                 _steamclientGameDir = null;
                 await _goldberg.Save(dirPath, config).ConfigureAwait(false);
@@ -975,13 +1130,16 @@ namespace GoldbergGUI.Core.ViewModels
 
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
             RuneApplied = _goldberg.RuneApplied(dirPath);
+            Ali213Applied = _goldberg.Ali213Applied(dirPath);
             SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
             MainWindowEnabled = true;
             StatusText = UseRuneMode
                 ? "Saved with RUNE! Launch via the game exe. Ready."
-                : UseSteamclientMode
-                    ? "Saved! Launch the game via steamclient_loader_x64.exe (or x32). Ready."
-                    : "Ready.";
+                : UseAli213Mode
+                    ? "Saved with ALI213! Launch via the game exe. Ready."
+                    : UseSteamclientMode
+                        ? "Saved! Launch the game via steamclient_loader_x64.exe (or x32). Ready."
+                        : "Ready.";
         }
 
         private async Task RevertConfig()
@@ -1010,11 +1168,13 @@ namespace GoldbergGUI.Core.ViewModels
                 await _goldberg.Revert(dirPath);
                 if (!string.Equals(steamclientGameDir, dirPath, StringComparison.OrdinalIgnoreCase))
                     await _goldberg.RevertSteamclientMode(steamclientGameDir);
-                // Always run RevertRune — it uses DeleteIfExists so is safe even if nothing is there
+                // Always run RevertRune/RevertAli213 — they use DeleteIfExists so are safe even if nothing is there
                 await _goldberg.RevertRune(dirPath);
+                await _goldberg.RevertAli213(dirPath);
                 _steamclientGameDir = null;
                 GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
                 RuneApplied = _goldberg.RuneApplied(dirPath);
+                Ali213Applied = _goldberg.Ali213Applied(dirPath);
                 SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
 
                 AppId = -1;
@@ -1034,8 +1194,11 @@ namespace GoldbergGUI.Core.ViewModels
                 _useSteamclientMode = false;
                 RaisePropertyChanged(() => UseSteamclientMode);
                 _useRuneMode = false;
+                _useAli213Mode = false;
                 RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseAli213Mode);
                 RaisePropertyChanged(() => UseGbeMode);
+                RaisePropertyChanged(() => NonAli213TabsVisible);
                 StatusText = "Reverted successfully! Ready.";
             }
             catch (Exception ex)
@@ -1139,6 +1302,20 @@ namespace GoldbergGUI.Core.ViewModels
             Offline = false;
             DisableNetworking = false;
             DisableOverlay = false;
+            _ali213SaveType          = 0;
+            _ali213Online            = false;
+            _ali213AchievementsCount = 0;
+            _ali213IsLoggedOn        = false;
+            _ali213FullBlockNetwork  = false;
+            _ali213FileRedirectCheck = false;
+            _ali213DecryptSteamStub  = 1;
+            RaisePropertyChanged(() => Ali213SaveType);
+            RaisePropertyChanged(() => Ali213Online);
+            RaisePropertyChanged(() => Ali213AchievementsCount);
+            RaisePropertyChanged(() => Ali213IsLoggedOn);
+            RaisePropertyChanged(() => Ali213FullBlockNetwork);
+            RaisePropertyChanged(() => Ali213FileRedirectCheck);
+            RaisePropertyChanged(() => Ali213DecryptSteamStub);
             ResetRuneControllerSettings();
         }
 
@@ -1194,19 +1371,35 @@ namespace GoldbergGUI.Core.ViewModels
 
             GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
             RuneApplied = _goldberg.RuneApplied(dirPath);
+            Ali213Applied = _goldberg.Ali213Applied(dirPath);
             SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
             // Auto-detect emulator mode from what is currently applied in the game directory
             if (_goldberg.RuneApplied(dirPath))
             {
                 _useRuneMode = true;
+                _useAli213Mode = false;
                 RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseAli213Mode);
                 RaisePropertyChanged(() => UseGbeMode);
+                RaisePropertyChanged(() => NonAli213TabsVisible);
+            }
+            else if (_goldberg.Ali213Applied(dirPath))
+            {
+                _useRuneMode = false;
+                _useAli213Mode = true;
+                RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseAli213Mode);
+                RaisePropertyChanged(() => UseGbeMode);
+                RaisePropertyChanged(() => NonAli213TabsVisible);
             }
             else if (_goldberg.GoldbergApplied(dirPath) || _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath)))
             {
                 _useRuneMode = false;
+                _useAli213Mode = false;
                 RaisePropertyChanged(() => UseRuneMode);
+                RaisePropertyChanged(() => UseAli213Mode);
                 RaisePropertyChanged(() => UseGbeMode);
+                RaisePropertyChanged(() => NonAli213TabsVisible);
             }
             // UseSteamclientMode is intentionally NOT updated here — it is a global preference
             // that persists across game switches and app restarts, and is only changed by the
@@ -1230,6 +1423,13 @@ namespace GoldbergGUI.Core.ViewModels
             Offline = config.Offline;
             DisableNetworking = config.DisableNetworking;
             DisableOverlay = config.DisableOverlay;
+            Ali213SaveType          = config.Ali213SaveType;
+            Ali213Online            = config.Ali213Online;
+            Ali213AchievementsCount = config.Ali213AchievementsCount;
+            Ali213IsLoggedOn        = config.Ali213IsLoggedOn;
+            Ali213FullBlockNetwork  = config.Ali213FullBlockNetwork;
+            Ali213FileRedirectCheck = config.Ali213FileRedirectCheck;
+            Ali213DecryptSteamStub  = config.Ali213DecryptSteamStub;
             RuneControllerEnabled            = config.RuneControllerEnabled;
             RuneControllerRumble             = config.RuneControllerRumble;
             RuneControllerSwapFaceButtons    = config.RuneControllerSwapFaceButtons;

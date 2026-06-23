@@ -31,6 +31,11 @@ namespace GoldbergGUI.Core.Models
         /// Persisted globally so the preference is remembered across games and app restarts.
         /// </summary>
         public bool UseSteamclientMode { get; set; }
+        /// <summary>
+        /// Whether to download achievement icon images when saving.
+        /// Persisted globally. Default true.
+        /// </summary>
+        public bool DownloadAchievementImages { get; set; } = true;
     }
     public class GoldbergConfiguration
     {
@@ -85,6 +90,16 @@ namespace GoldbergGUI.Core.Models
 
         /// <summary>Raw JSON string for branches.json (gbe_fork beta-branch data).</summary>
         public string BranchesJson { get; set; }
+
+        // ALI213-specific settings (written to SteamConfig.ini)
+        public int Ali213SaveType { get; set; } = 0;
+        public bool Ali213Online { get; set; } = false;
+        public int Ali213AchievementsCount { get; set; } = 0;
+        public bool Ali213IsLoggedOn { get; set; } = false;
+        public bool Ali213FullBlockNetwork { get; set; } = false;
+        public bool Ali213FileRedirectCheck { get; set; } = false;
+        // 0=disabled, 1=steam_api(64).dll decrypts stub, 2=SteamClient.dll decrypts stub
+        public int Ali213DecryptSteamStub { get; set; } = 1;
 
         // RUNE-specific controller settings (written to [Controller] in steam_emu.ini)
         public bool RuneControllerEnabled { get; set; } = true;

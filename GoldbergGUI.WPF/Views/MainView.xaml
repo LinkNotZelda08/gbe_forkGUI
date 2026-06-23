@@ -34,8 +34,11 @@
                                  VerticalAlignment="Center" Margin="0,0,14,0"
                                  ToolTip="Use gbe_fork (Goldberg) emulator"/>
                     <RadioButton Content="_RUNE" IsChecked="{Binding UseRuneMode, Mode=TwoWay}"
-                                 VerticalAlignment="Center"
+                                 VerticalAlignment="Center" Margin="0,0,14,0"
                                  ToolTip="Use RUNE emulator (steam_emu.ini + version.dll)"/>
+                    <RadioButton Content="_ALI213" IsChecked="{Binding UseAli213Mode, Mode=TwoWay}"
+                                 VerticalAlignment="Center"
+                                 ToolTip="Use ALI213 emulator (SteamConfig.ini)"/>
                 </StackPanel>
             </Border>
             <TabControl Grid.Row="1" Margin="5,5,5,5">
@@ -114,7 +117,9 @@
                                     </Grid>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Achievements" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
+                            <TabItem Header="Achievements" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}"
+                                     Visibility="{Binding NonAli213TabsVisible, Converter={StaticResource B2V}}"
+                                     >
                                 <Grid Margin="0,10,0,10">
                                     <Grid.RowDefinitions>
                                         <RowDefinition/>
@@ -246,7 +251,9 @@
                                     </TextBlock>
                                 </Grid>
                             </TabItem>
-                            <TabItem Header="Controller" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}">
+                            <TabItem Header="Controller" IsEnabled="{Binding DllSelected, UpdateSourceTrigger=PropertyChanged}"
+                                     Visibility="{Binding NonAli213TabsVisible, Converter={StaticResource B2V}}"
+                                     >
                                 <Grid Margin="0,10,0,10">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -511,6 +518,70 @@
                                     <CheckBox Content="Offline" IsChecked="{Binding Offline, Mode=TwoWay}" Height="20" VerticalAlignment="Stretch" VerticalContentAlignment="Center"/>
                                     <CheckBox Content="Disable Networking" IsChecked="{Binding DisableNetworking, Mode=TwoWay}" Height="20" VerticalContentAlignment="Center"/>
                                     <CheckBox Content="Disable Overlay" IsChecked="{Binding DisableOverlay, Mode=TwoWay}" Height="20" VerticalContentAlignment="Center" IsEnabled="False"/>
+                                    <CheckBox Content="Download achievement images" IsChecked="{Binding DownloadAchievementImages, Mode=TwoWay}" Height="20" VerticalContentAlignment="Center"
+                                              ToolTip="Download achievement icons from Steam CDN when saving (uncheck to skip; existing local images are preserved)"/>
+                                    <!-- ALI213 Settings (visible only in ALI213 mode) -->
+                                    <GroupBox Margin="0,10,0,0" Padding="6,4"
+                                              Visibility="{Binding UseAli213Mode, Converter={StaticResource B2V}}"
+                                              Foreground="{DynamicResource ForegroundBrush}">
+                                        <GroupBox.Header>
+                                            <TextBlock Text="ALI213 Settings" Foreground="{DynamicResource ForegroundBrush}"/>
+                                        </GroupBox.Header>
+                                        <StackPanel>
+                                            <!-- Save Type -->
+                                            <Grid Margin="0,4,0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Save Type:" VerticalAlignment="Center"
+                                                           Margin="0,0,8,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <ComboBox Grid.Column="1"
+                                                          ItemsSource="{Binding Ali213SaveTypeOptions}"
+                                                          DisplayMemberPath="Display"
+                                                          SelectedValuePath="Value"
+                                                          SelectedValue="{Binding Ali213SaveType, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <!-- Decrypt Steam Stub -->
+                                            <Grid Margin="0,0,0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Decrypt Steam Stub:" VerticalAlignment="Center"
+                                                           Margin="0,0,8,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <ComboBox Grid.Column="1"
+                                                          ItemsSource="{Binding Ali213DecryptOptions}"
+                                                          DisplayMemberPath="Display"
+                                                          SelectedValuePath="Value"
+                                                          SelectedValue="{Binding Ali213DecryptSteamStub, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <!-- Achievement Count Limit -->
+                                            <Grid Margin="0,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="60"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Achievement Limit:" VerticalAlignment="Center"
+                                                           Margin="0,0,8,0" Foreground="{DynamicResource ForegroundBrush}"/>
+                                                <TextBox Grid.Column="1"
+                                                         Text="{Binding Ali213AchievementsCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         ToolTip="AchievementsCount — maximum achievements unlockable (0 = no limit)"/>
+                                            </Grid>
+                                            <!-- Checkboxes -->
+                                            <CheckBox Content="Is Logged On" IsChecked="{Binding Ali213IsLoggedOn, Mode=TwoWay}"
+                                                      VerticalContentAlignment="Center" Margin="0,0,0,2"/>
+                                            <CheckBox Content="Online" IsChecked="{Binding Ali213Online, Mode=TwoWay}"
+                                                      VerticalContentAlignment="Center" Margin="0,0,0,2"/>
+                                            <CheckBox Content="Block Network" IsChecked="{Binding Ali213FullBlockNetwork, Mode=TwoWay}"
+                                                      VerticalContentAlignment="Center" Margin="0,0,0,2"
+                                                      ToolTip="FullBlockNetwork=1 — blocks all outgoing network traffic"/>
+                                            <CheckBox Content="Redirect File Handle to &quot;.valve&quot;"
+                                                      IsChecked="{Binding Ali213FileRedirectCheck, Mode=TwoWay}"
+                                                      VerticalContentAlignment="Center"
+                                                      ToolTip="FileRedirectCheck=1 — redirects file handles to .valve save path"/>
+                                        </StackPanel>
+                                    </GroupBox>
                                 </StackPanel>
                             </TabItem>
                         </TabControl>
@@ -641,6 +712,7 @@
                 <StackPanel Orientation="Horizontal">
                     <CheckBox Content="gbe__fork applied" IsChecked="{Binding GoldbergApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
                     <CheckBox Content="RUNE applied" IsChecked="{Binding RuneApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                    <CheckBox Content="ALI213 applied" IsChecked="{Binding Ali213Applied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
                     <CheckBox Content="Steamclient mode" IsChecked="{Binding SteamclientModeApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center"/>
                 </StackPanel>
                 <Button Content="_Save" Command="{Binding SaveConfigCommand}" Width="90" Grid.Column="1" Margin="0,0,5,0" Padding="8,4"/>

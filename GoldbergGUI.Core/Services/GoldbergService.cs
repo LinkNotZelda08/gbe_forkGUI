@@ -42,6 +42,9 @@ namespace GoldbergGUI.Core.Services
         Task ApplyRune(string path, GoldbergConfiguration config, string accountName, long steamId, string language);
         Task RevertRune(string path);
         bool RuneApplied(string path);
+        Task ApplyAli213(string path, GoldbergConfiguration config, string accountName, long steamId, string language);
+        Task RevertAli213(string path);
+        bool Ali213Applied(string path);
     }
 
     // ReSharper disable once UnusedType.Global
@@ -64,6 +67,9 @@ namespace GoldbergGUI.Core.Services
         private readonly string _goldbergPath    = Path.Combine(Directory.GetCurrentDirectory(), "goldberg");
         private readonly string _runePath        = Path.Combine(Directory.GetCurrentDirectory(), "rune");
         private readonly string _steamstubPath   = Path.Combine(Directory.GetCurrentDirectory(), "steamstub");
+        private readonly string _ali213Path      = Path.Combine(Directory.GetCurrentDirectory(), "ali213");
+
+        private bool _downloadAchievementImages = true;
 
         // gbe_fork uses "GSE Saves" instead of "Goldberg SteamEmu Saves"
         private static readonly string GlobalSettingsPath =
@@ -136,11 +142,12 @@ namespace GoldbergGUI.Core.Services
             _log.Info("Getting global settings...");
             EnsureDirectory(Path.GetDirectoryName(_globalUserIniPath));
 
-            var accountName      = DefaultAccountName;
-            var steamId          = DefaultSteamId;
-            var language         = DefaultLanguage;
-            var customBroadcastIps = new List<string>();
-            var useSteamclientMode      = false;
+            var accountName           = DefaultAccountName;
+            var steamId               = DefaultSteamId;
+            var language              = DefaultLanguage;
+            var customBroadcastIps    = new List<string>();
+            var useSteamclientMode    = false;
+            var downloadAchievements  = true;
 
             if (File.Exists(_globalUserIniPath))
             {
@@ -163,6 +170,8 @@ namespace GoldbergGUI.Core.Services
                         if (general.TryGetValue("use_steamclient_mode", out var scMode))
                             bool.TryParse(scMode.Trim(), out useSteamclientMode);
 
+                        if (general.TryGetValue("download_achievement_images", out var dai))
+                            bool.TryParse(dai.Trim(), out downloadAchievements);
                     }
 
                     if (ini.TryGetValue("user::saves", out var saves) &&
@@ -175,14 +184,16 @@ namespace GoldbergGUI.Core.Services
                 }).ConfigureAwait(false);
             }
 
+            _downloadAchievementImages = downloadAchievements;
             _log.Info("Got global settings.");
             return new GoldbergGlobalConfiguration
             {
-                AccountName             = accountName,
-                UserSteamId             = steamId,
-                Language                = language,
-                CustomBroadcastIps      = customBroadcastIps,
-                UseSteamclientMode      = useSteamclientMode,
+                AccountName              = accountName,
+                UserSteamId              = steamId,
+                Language                 = language,
+                CustomBroadcastIps       = customBroadcastIps,
+                UseSteamclientMode       = useSteamclientMode,
+                DownloadAchievementImages = downloadAchievements,
             };
         }
 
@@ -199,11 +210,13 @@ namespace GoldbergGUI.Core.Services
             var language    = string.IsNullOrEmpty(c.Language) ? DefaultLanguage : c.Language;
 
             var sb = new StringBuilder();
+            _downloadAchievementImages = c.DownloadAchievementImages;
             sb.AppendLine("[user::general]");
             sb.AppendLine($"account_name={accountName}");
             sb.AppendLine($"account_steamid={userSteamId}");
             sb.AppendLine($"language={language}");
             sb.AppendLine($"use_steamclient_mode={c.UseSteamclientMode.ToString().ToLower()}");
+            sb.AppendLine($"download_achievement_images={c.DownloadAchievementImages.ToString().ToLower()}");
             sb.AppendLine();
 
             if (c.CustomBroadcastIps?.Count > 0)
@@ -476,6 +489,52 @@ namespace GoldbergGUI.Core.Services
                 _log.Info($"Loaded {controllerSets.Count} controller action set(s).");
             }
 
+            // ALI213: read from SteamConfig.ini if present
+            var ali213SaveType          = 0;
+            var ali213Online            = false;
+            var ali213AchievementsCount = 0;
+            var ali213IsLoggedOn        = false;
+            var ali213FullBlockNetwork  = false;
+            var ali213FileRedirectCheck = false;
+            var ali213DecryptSteamStub  = 1;
+            var steamConfigPath = Path.Combine(path, "SteamConfig.ini");
+            if (File.Exists(steamConfigPath))
+            {
+                await Task.Run(() =>
+                {
+                    var ini = ReadIniFile(steamConfigPath);
+
+                    if (appId <= 0 && ini.TryGetValue("Settings", out var sett0) &&
+                        sett0.TryGetValue("AppID", out var appIdStr0) &&
+                        int.TryParse(appIdStr0, out var parsedAppId0))
+                        appId = parsedAppId0;
+
+                    if (dlcList.Count == 0 && ini.TryGetValue("DLC", out var dlcSection))
+                        foreach (var kv in dlcSection)
+                            if (int.TryParse(kv.Key, out var dlcId))
+                                dlcList.Add(new DlcApp { AppId = dlcId, Name = kv.Value, Enabled = true });
+
+                    if (ini.TryGetValue("Settings", out var sett))
+                    {
+                        if (sett.TryGetValue("SaveType", out var st) && int.TryParse(st, out var saveType))
+                            ali213SaveType = saveType;
+                        ali213Online     = IniFlag(sett, "Online");
+                        ali213IsLoggedOn = IniFlag(sett, "IsLoggedOn");
+                        if (sett.TryGetValue("AchievementsCount", out var ac) &&
+                            int.TryParse(ac, out var achCount))
+                            ali213AchievementsCount = achCount;
+                    }
+                    if (ini.TryGetValue("Option", out var opt))
+                    {
+                        ali213FullBlockNetwork  = IniFlag(opt, "FullBlockNetwork");
+                        ali213FileRedirectCheck = IniFlag(opt, "FileRedirectCheck");
+                        if (opt.TryGetValue("DECRYPT_STEAM_STUB", out var dss) &&
+                            int.TryParse(dss, out var decrypt))
+                            ali213DecryptSteamStub = decrypt;
+                    }
+                }).ConfigureAwait(false);
+            }
+
             // RUNE: read from steam_emu.ini if present
             var runeControllerEnabled            = true;
             var runeControllerRumble             = true;
@@ -562,6 +621,13 @@ namespace GoldbergGUI.Core.Services
                 DisableOverlay                   = disableOverlay,
                 WorkshopMods                     = modList,
                 ControllerActionSets             = controllerSets,
+                Ali213SaveType          = ali213SaveType,
+                Ali213Online            = ali213Online,
+                Ali213AchievementsCount = ali213AchievementsCount,
+                Ali213IsLoggedOn        = ali213IsLoggedOn,
+                Ali213FullBlockNetwork  = ali213FullBlockNetwork,
+                Ali213FileRedirectCheck = ali213FileRedirectCheck,
+                Ali213DecryptSteamStub  = ali213DecryptSteamStub,
                 RuneControllerEnabled            = runeControllerEnabled,
                 RuneControllerRumble             = runeControllerRumble,
                 RuneControllerSwapFaceButtons    = runeControllerSwapFaceButtons,
@@ -655,26 +721,34 @@ namespace GoldbergGUI.Core.Services
             // Achievements
             if (c.Achievements.Count > 0)
             {
-                _log.Info("Downloading achievement images...");
                 var imagePath       = Path.Combine(settingsDir, "achievement_images");
                 var legacyImagePath = Path.Combine(settingsDir, "images");
-                EnsureDirectory(imagePath);
 
-                // Migrate any images that were previously saved to the legacy 'images/' folder
-                if (Directory.Exists(legacyImagePath))
+                if (_downloadAchievementImages)
                 {
-                    foreach (var src in Directory.GetFiles(legacyImagePath))
-                        File.Copy(src, Path.Combine(imagePath, Path.GetFileName(src)), overwrite: true);
-                    Directory.Delete(legacyImagePath, true);
-                    _log.Info("Migrated images from 'images/' to 'achievement_images/'.");
+                    _log.Info("Downloading achievement images...");
+                    EnsureDirectory(imagePath);
+
+                    // Migrate any images that were previously saved to the legacy 'images/' folder
+                    if (Directory.Exists(legacyImagePath))
+                    {
+                        foreach (var src in Directory.GetFiles(legacyImagePath))
+                            File.Copy(src, Path.Combine(imagePath, Path.GetFileName(src)), overwrite: true);
+                        Directory.Delete(legacyImagePath, true);
+                        _log.Info("Migrated images from 'images/' to 'achievement_images/'.");
+                    }
+
+                    foreach (var ach in c.Achievements)
+                    {
+                        await DownloadImageAsync(imagePath, ach.Icon).ConfigureAwait(false);
+                        await DownloadImageAsync(imagePath, ach.IconGray).ConfigureAwait(false);
+                        ach.Icon     = $"achievement_images/{Path.GetFileName(ach.Icon)}";
+                        ach.IconGray = $"achievement_images/{Path.GetFileName(ach.IconGray)}";
+                    }
                 }
-
-                foreach (var ach in c.Achievements)
+                else
                 {
-                    await DownloadImageAsync(imagePath, ach.Icon).ConfigureAwait(false);
-                    await DownloadImageAsync(imagePath, ach.IconGray).ConfigureAwait(false);
-                    ach.Icon     = $"achievement_images/{Path.GetFileName(ach.Icon)}";
-                    ach.IconGray = $"achievement_images/{Path.GetFileName(ach.IconGray)}";
+                    _log.Info("Skipping achievement image download (disabled in settings).");
                 }
 
                 _log.Info("Saving achievements...");
@@ -1147,10 +1221,11 @@ namespace GoldbergGUI.Core.Services
                     foreach (var file in steamclientFiles)
                         DeleteIfExists(Path.Combine(gameDir, file));
                     ForceDeleteDirectory(Path.Combine(gameDir, "extra_dlls"));
-                    // Also remove steam_settings written beside steamclient64.dll
+                    // Also remove steam_settings and steam_appid.txt written beside steamclient64.dll
                     var gameDirSettings = Path.Combine(gameDir, "steam_settings");
                     if (Directory.Exists(gameDirSettings))
                         ForceDeleteDirectory(gameDirSettings);
+                    DeleteIfExists(Path.Combine(gameDir, "steam_appid.txt"));
                 }
             }).ConfigureAwait(false);
 
@@ -1240,7 +1315,7 @@ namespace GoldbergGUI.Core.Services
                     "steamclient_loader.exe", "steamclient_loader64.exe",
                     "steamclient.dll", "steamclient64.dll",
                     "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll",
-                    "ColdClientLoader.ini", "version.dll"
+                    "ColdClientLoader.ini", "version.dll", "steam_appid.txt"
                 })
                     DeleteIfExists(Path.Combine(path, file));
 
@@ -1929,6 +2004,157 @@ namespace GoldbergGUI.Core.Services
             File.Exists(Path.Combine(path, "steam_emu.ini")) &&
             (File.Exists(Path.Combine(path, "steam_api64.rne")) ||
              File.Exists(Path.Combine(path, "steam_api.rne")));
+
+        // -----------------------------------------------------------------------
+        // ALI213 emulator support
+        // -----------------------------------------------------------------------
+
+        public async Task ApplyAli213(string path, GoldbergConfiguration config,
+            string accountName, long steamId, string language)
+        {
+            _log.Info($"Applying ALI213 to {path}...");
+
+            var has64    = File.Exists(Path.Combine(path, "steam_api64.dll")) ||
+                           File.Exists(Path.Combine(path, "steam_api64.ali")) ||
+                           File.Exists(Path.Combine(path, "steam_api64_o.dll"));
+            var dllBase  = has64 ? "steam_api64" : "steam_api";
+
+            var currentDll   = Path.Combine(path, $"{dllBase}.dll");
+            var aliBackup    = Path.Combine(path, $"{dllBase}.ali");
+            var gbfBackup    = Path.Combine(path, $"{dllBase}_o.dll");
+            var rneDll       = Path.Combine(path, $"{dllBase}.rne");
+            var ali213SrcDll = Path.Combine(_ali213Path, $"{dllBase}.dll");
+
+            // If gbe_fork had replaced the DLL, restore the original first
+            if (File.Exists(gbfBackup))
+            {
+                DeleteIfExists(currentDll);
+                File.Move(gbfBackup, currentDll);
+                _log.Info($"Restored original {dllBase}.dll from gbe_fork backup.");
+            }
+            // If RUNE had replaced the DLL, restore it from .rne
+            if (File.Exists(rneDll))
+            {
+                DeleteIfExists(currentDll);
+                File.Move(rneDll, currentDll);
+                _log.Info($"Restored original {dllBase}.dll from RUNE backup.");
+            }
+            DeleteIfExists(Path.Combine(path, $".{dllBase}.dll.GOLDBERGGUIBACKUP"));
+
+            // Backup original as .ali on first apply; on re-apply just overwrite the ALI dll
+            if (!File.Exists(aliBackup) && File.Exists(currentDll))
+            {
+                File.Move(currentDll, aliBackup);
+                _log.Info($"Backed up original {dllBase}.dll → {dllBase}.ali");
+            }
+            else
+            {
+                DeleteIfExists(currentDll);
+            }
+
+            if (File.Exists(ali213SrcDll))
+            {
+                File.Copy(ali213SrcDll, currentDll);
+                _log.Info($"Copied ALI213 {dllBase}.dll.");
+            }
+            else
+            {
+                _log.Error($"ALI213 source DLL not found: {ali213SrcDll}");
+                MessageBox.Show(
+                    $"ALI213 DLLs are missing from the application folder.\n\nExpected: {ali213SrcDll}",
+                    "ALI213 DLL Missing", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+
+            var iniContent = BuildAli213Ini(config.AppId, accountName, language, config, steamId);
+            await File.WriteAllTextAsync(Path.Combine(path, "SteamConfig.ini"), iniContent)
+                .ConfigureAwait(false);
+            _log.Info("Wrote SteamConfig.ini for ALI213.");
+        }
+
+        public async Task RevertAli213(string path)
+        {
+            _log.Info($"Reverting ALI213 in {path}...");
+            await Task.Run(() =>
+            {
+                foreach (var name in new[] { "steam_api64", "steam_api" })
+                {
+                    var currentDll = Path.Combine(path, $"{name}.dll");
+                    var aliDll     = Path.Combine(path, $"{name}.ali");
+                    if (File.Exists(aliDll))
+                    {
+                        DeleteIfExists(currentDll);
+                        File.Move(aliDll, currentDll);
+                        _log.Info($"Restored {name}.dll from .ali backup.");
+                    }
+                }
+                DeleteIfExists(Path.Combine(path, "SteamConfig.ini"));
+            }).ConfigureAwait(false);
+            _log.Info("ALI213 reverted.");
+        }
+
+        public bool Ali213Applied(string path) =>
+            File.Exists(Path.Combine(path, "SteamConfig.ini")) &&
+            (File.Exists(Path.Combine(path, "steam_api64.ali")) ||
+             File.Exists(Path.Combine(path, "steam_api.ali")));
+
+        private string BuildAli213Ini(int appId, string accountName, string language,
+            GoldbergConfiguration config, long steamId)
+        {
+            // Convert Steam64 ID to 16-digit hex, split into high (first 8) and low (last 8) parts
+            var hex     = steamId.ToString("x16");
+            var hexHigh = hex.Substring(0, 8);
+            var hexLow  = hex.Substring(8, 8);
+
+            var sb = new StringBuilder();
+            sb.AppendLine("[Settings]");
+            sb.AppendLine();
+            sb.AppendLine("; game appid here");
+            sb.AppendLine($"AppID = {appId}");
+            sb.AppendLine();
+            sb.AppendLine("; source steam_api.dll version");
+            sb.AppendLine("API = ");
+            sb.AppendLine();
+            sb.AppendLine("; player name");
+            sb.AppendLine($"PlayerName = {accountName}");
+            sb.AppendLine();
+            sb.AppendLine("; game Language");
+            sb.AppendLine($"Language = {language}");
+            sb.AppendLine();
+            // 0=VALVE(game dir), 1=VALVE(My Docs), 4=RELOADED, 5=SKIDROW, 6=FLT, 7=CODEX(My Docs), 8=CODEX(AppData)
+            sb.AppendLine($"SaveType = {config.Ali213SaveType}");
+            sb.AppendLine();
+            if (config.Ali213AchievementsCount > 0)
+                sb.AppendLine($"AchievementsCount={config.Ali213AchievementsCount}");
+            sb.AppendLine($"SteamUserID = {hexLow}");
+            sb.AppendLine($"SteamUserIDH = {hexHigh}");
+            sb.AppendLine();
+            if (config.Ali213IsLoggedOn)
+                sb.AppendLine("IsLoggedOn=1");
+            if (config.Ali213Online)
+                sb.AppendLine("Online=1");
+            var enabledDlcs = config.DlcList?.Where(d => d.Enabled).ToList();
+            if (enabledDlcs?.Count > 0)
+                sb.AppendLine("UnLockListedDLCOnly=1");
+            sb.AppendLine();
+
+            if (enabledDlcs?.Count > 0)
+            {
+                sb.AppendLine("[DLC]");
+                foreach (var dlc in enabledDlcs)
+                    sb.AppendLine($"{dlc.AppId}={dlc.Name}");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("[Option]");
+            sb.AppendLine();
+            if (config.Ali213FullBlockNetwork)
+                sb.AppendLine("FullBlockNetwork=1");
+            if (config.Ali213FileRedirectCheck)
+                sb.AppendLine("FileRedirectCheck=1");
+            // 0=disabled, 1=steam_api(64).dll decrypts stub, 2=SteamClient.dll decrypts stub
+            sb.AppendLine($"DECRYPT_STEAM_STUB={config.Ali213DecryptSteamStub}");
+            return sb.ToString();
+        }
 
     }
 }

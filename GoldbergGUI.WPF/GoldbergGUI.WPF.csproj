@@ -24,6 +24,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="ali213\**">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
     <Content Include="rune\**">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
