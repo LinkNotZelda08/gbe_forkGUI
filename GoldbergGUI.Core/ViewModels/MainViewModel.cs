@@ -917,7 +917,7 @@ namespace GoldbergGUI.Core.ViewModels
                     await _goldberg.RevertRune(dirPath).ConfigureAwait(false);
                 // Steamclient mode: restore original steam_api.dll, then set up loader
                 await _goldberg.RevertDllOnly(dirPath).ConfigureAwait(true);
-                await _goldberg.SaveConfigOnly(dirPath, config).ConfigureAwait(true);
+                string gameDir;
                 if (!_goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath)))
                 {
                     var dialog = new OpenFileDialog
@@ -934,16 +934,19 @@ namespace GoldbergGUI.Core.ViewModels
                     }
                     MainWindowEnabled = false;
                     _steamclientGameDir = Path.GetDirectoryName(dialog.FileName) ?? dirPath;
-                    await _goldberg.SetupSteamclientMode(_steamclientGameDir, Path.GetFileName(dialog.FileName), AppId)
+                    gameDir = _steamclientGameDir;
+                    await _goldberg.SetupSteamclientMode(gameDir, Path.GetFileName(dialog.FileName), AppId)
                         .ConfigureAwait(false);
                 }
                 else
                 {
-                    var gameDir = GetSteamclientGameDir(dirPath);
+                    gameDir = GetSteamclientGameDir(dirPath);
                     _steamclientGameDir = gameDir;
                     await _goldberg.SetupSteamclientMode(gameDir,
                         _goldberg.GetSteamclientExeName(gameDir), AppId).ConfigureAwait(false);
                 }
+                // Config must be beside steamclient64.dll (game root), per gbe_fork README
+                await _goldberg.SaveConfigOnly(gameDir, config).ConfigureAwait(true);
             }
             else
             {
@@ -1254,10 +1257,15 @@ namespace GoldbergGUI.Core.ViewModels
             if (File.Exists(Path.Combine(dirPath, "ColdClientLoader.ini")))
                 return dirPath;
 
-            // Check one level up (exe may be in parent of dll subfolder)
+            // Check one level up (e.g., dll in a direct subfolder of game root)
             var parent = Directory.GetParent(dirPath)?.FullName;
             if (parent != null && File.Exists(Path.Combine(parent, "ColdClientLoader.ini")))
                 return parent;
+
+            // Check two levels up (e.g., dll in GameData\Plugins\ under game root)
+            var grandParent = parent != null ? Directory.GetParent(parent)?.FullName : null;
+            if (grandParent != null && File.Exists(Path.Combine(grandParent, "ColdClientLoader.ini")))
+                return grandParent;
 
             return dirPath;
         }
