@@ -517,16 +517,18 @@ namespace GoldbergGUI.Core.ViewModels
             }
         }
 
+        private GoldbergGlobalConfiguration BuildGlobalConfig() => new GoldbergGlobalConfiguration
+        {
+            AccountName               = AccountName,
+            UserSteamId               = SteamId,
+            Language                  = SelectedLanguage,
+            CustomBroadcastIps        = _customBroadcastIps,
+            UseSteamclientMode        = _globalSteamclientPreference,
+            DownloadAchievementImages = _downloadAchievementImages,
+        };
+
         private Task PersistGlobalSteamclientPreference() =>
-            _goldberg.SetGlobalSettings(new GoldbergGlobalConfiguration
-            {
-                AccountName               = AccountName,
-                UserSteamId               = SteamId,
-                Language                  = SelectedLanguage,
-                CustomBroadcastIps        = _customBroadcastIps,
-                UseSteamclientMode        = _globalSteamclientPreference,
-                DownloadAchievementImages = _downloadAchievementImages,
-            });
+            _goldberg.SetGlobalSettings(BuildGlobalConfig());
 
         public string StatusText
         {
@@ -987,15 +989,7 @@ namespace GoldbergGUI.Core.ViewModels
             _log.Info("Saving global settings...");
             // Persist whatever the user currently has checked as the global preference
             _globalSteamclientPreference = UseSteamclientMode;
-            await _goldberg.SetGlobalSettings(new GoldbergGlobalConfiguration
-            {
-                AccountName               = AccountName,
-                UserSteamId               = SteamId,
-                Language                  = SelectedLanguage,
-                CustomBroadcastIps        = _customBroadcastIps,
-                UseSteamclientMode        = _globalSteamclientPreference,
-                DownloadAchievementImages = _downloadAchievementImages,
-            }).ConfigureAwait(false);
+            await _goldberg.SetGlobalSettings(BuildGlobalConfig()).ConfigureAwait(false);
 
             if (!DllSelected)
             {
@@ -1302,6 +1296,12 @@ namespace GoldbergGUI.Core.ViewModels
             Offline = false;
             DisableNetworking = false;
             DisableOverlay = false;
+            ResetAli213Settings();
+            ResetRuneControllerSettings();
+        }
+
+        private void ResetAli213Settings()
+        {
             _ali213SaveType          = 0;
             _ali213Online            = false;
             _ali213AchievementsCount = 0;
@@ -1316,7 +1316,6 @@ namespace GoldbergGUI.Core.ViewModels
             RaisePropertyChanged(() => Ali213FullBlockNetwork);
             RaisePropertyChanged(() => Ali213FileRedirectCheck);
             RaisePropertyChanged(() => Ali213DecryptSteamStub);
-            ResetRuneControllerSettings();
         }
 
         private void ResetRuneControllerSettings()

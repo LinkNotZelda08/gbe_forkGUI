@@ -519,6 +519,7 @@
                                     <CheckBox Content="Disable Networking" IsChecked="{Binding DisableNetworking, Mode=TwoWay}" Height="20" VerticalContentAlignment="Center"/>
                                     <CheckBox Content="Disable Overlay" IsChecked="{Binding DisableOverlay, Mode=TwoWay}" Height="20" VerticalContentAlignment="Center" IsEnabled="False"/>
                                     <CheckBox Content="Download achievement images" IsChecked="{Binding DownloadAchievementImages, Mode=TwoWay}" Height="20" VerticalContentAlignment="Center"
+                                              Visibility="{Binding UseGbeMode, Converter={StaticResource B2V}}"
                                               ToolTip="Download achievement icons from Steam CDN when saving (uncheck to skip; existing local images are preserved)"/>
                                     <!-- ALI213 Settings (visible only in ALI213 mode) -->
                                     <GroupBox Margin="0,10,0,0" Padding="6,4"
@@ -712,7 +713,8 @@
                 <StackPanel Orientation="Horizontal">
                     <CheckBox Content="gbe__fork applied" IsChecked="{Binding GoldbergApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
                     <CheckBox Content="RUNE applied" IsChecked="{Binding RuneApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
-                    <CheckBox Content="ALI213 applied" IsChecked="{Binding Ali213Applied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
+                    <CheckBox Content="ALI213 applied" IsChecked="{Binding Ali213Applied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"
+                              ToolTip="Read-only: indicates whether ALI213 emulator is currently applied in the selected game directory"/>
                     <CheckBox Content="Steamclient mode" IsChecked="{Binding SteamclientModeApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center"/>
                 </StackPanel>
                 <Button Content="_Save" Command="{Binding SaveConfigCommand}" Width="90" Grid.Column="1" Margin="0,0,5,0" Padding="8,4"/>
