@@ -598,9 +598,12 @@ namespace GoldbergGUI.Core.Services
             if (c.Achievements.Count == 0)
             {
                 _log.Info("No achievements set! Removing achievement files...");
-                var imagePath       = Path.Combine(settingsDir, "images");
+                foreach (var imgDir in new[] { "achievement_images", "images" })
+                {
+                    var p = Path.Combine(settingsDir, imgDir);
+                    if (Directory.Exists(p)) Directory.Delete(p, true);
+                }
                 var achievementPath = Path.Combine(settingsDir, "achievements.json");
-                if (Directory.Exists(imagePath))  Directory.Delete(imagePath, true);
                 if (File.Exists(achievementPath)) File.Delete(achievementPath);
             }
 
@@ -653,14 +656,25 @@ namespace GoldbergGUI.Core.Services
             if (c.Achievements.Count > 0)
             {
                 _log.Info("Downloading achievement images...");
-                var imagePath = Path.Combine(settingsDir, "images");
+                var imagePath       = Path.Combine(settingsDir, "achievement_images");
+                var legacyImagePath = Path.Combine(settingsDir, "images");
                 EnsureDirectory(imagePath);
+
+                // Migrate any images that were previously saved to the legacy 'images/' folder
+                if (Directory.Exists(legacyImagePath))
+                {
+                    foreach (var src in Directory.GetFiles(legacyImagePath))
+                        File.Copy(src, Path.Combine(imagePath, Path.GetFileName(src)), overwrite: true);
+                    Directory.Delete(legacyImagePath, true);
+                    _log.Info("Migrated images from 'images/' to 'achievement_images/'.");
+                }
+
                 foreach (var ach in c.Achievements)
                 {
                     await DownloadImageAsync(imagePath, ach.Icon).ConfigureAwait(false);
                     await DownloadImageAsync(imagePath, ach.IconGray).ConfigureAwait(false);
-                    ach.Icon     = $"images/{Path.GetFileName(ach.Icon)}";
-                    ach.IconGray = $"images/{Path.GetFileName(ach.IconGray)}";
+                    ach.Icon     = $"achievement_images/{Path.GetFileName(ach.Icon)}";
+                    ach.IconGray = $"achievement_images/{Path.GetFileName(ach.IconGray)}";
                 }
 
                 _log.Info("Saving achievements...");
@@ -743,6 +757,45 @@ namespace GoldbergGUI.Core.Services
             mainIni["main::connectivity"]["disable_overlay"]    = c.DisableOverlay    ? "1" : "0";
 
             await File.WriteAllTextAsync(configsMainPath, SerializeIni(mainIni)).ConfigureAwait(false);
+
+            // stats.json
+            if (c.Stats != null && c.Stats.Count > 0)
+            {
+                _log.Info("Saving stats.json...");
+                var statsData = c.Stats.Select(s => new Dictionary<string, object>
+                {
+                    ["name"]    = s.Name ?? "",
+                    ["type"]    = s.StatTypeSetting switch
+                    {
+                        Stat.StatType.Float   => "FLOAT",
+                        Stat.StatType.AvgRate => "AVGRATE",
+                        _                     => "INT"
+                    },
+                    ["default"] = double.TryParse(s.Value, out var dv) ? (object)dv : (object)0.0
+                });
+                await File.WriteAllTextAsync(
+                    Path.Combine(settingsDir, "stats.json"),
+                    JsonSerializer.Serialize(statsData, new JsonSerializerOptions { WriteIndented = true }))
+                    .ConfigureAwait(false);
+            }
+
+            // branches.json
+            if (!string.IsNullOrEmpty(c.BranchesJson))
+            {
+                _log.Info("Saving branches.json...");
+                await File.WriteAllTextAsync(Path.Combine(settingsDir, "branches.json"), c.BranchesJson)
+                    .ConfigureAwait(false);
+            }
+
+            // supported_languages.txt
+            if (c.SupportedLanguages != null && c.SupportedLanguages.Count > 0)
+            {
+                _log.Info("Saving supported_languages.txt...");
+                await File.WriteAllTextAsync(
+                    Path.Combine(settingsDir, "supported_languages.txt"),
+                    string.Join(Environment.NewLine, c.SupportedLanguages) + Environment.NewLine)
+                    .ConfigureAwait(false);
+            }
 
             // Workshop mods: move folders between mods/ and mods_disabled/ based on Enabled flag
             if (c.WorkshopMods != null && c.WorkshopMods.Count > 0)
@@ -1059,23 +1112,27 @@ namespace GoldbergGUI.Core.Services
                     "steamclient_loader.exe", "steamclient_loader64.exe",
                     "steamclient.dll", "steamclient64.dll",
                     "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll",
-                    "ColdClientLoader.ini"
+                    "ColdClientLoader.ini", "version.dll"
                 };
 
-                // Find any alternate gameDir recorded in the ini before deleting it
+                // Find any alternate gameDir by searching up to two levels above the dll dir
                 var iniInPath = Path.Combine(path, "ColdClientLoader.ini");
                 string gameDir = null;
                 if (File.Exists(iniInPath))
                 {
-                    // Exe= line tells us the game exe name; the ini itself lives in gameDir
                     gameDir = Path.GetDirectoryName(iniInPath);
                 }
                 else
                 {
-                    // Search one level up in case ini was written to the exe dir above the dll dir
                     var parent = Directory.GetParent(path)?.FullName;
                     if (parent != null && File.Exists(Path.Combine(parent, "ColdClientLoader.ini")))
                         gameDir = parent;
+                    else
+                    {
+                        var grandParent = parent != null ? Directory.GetParent(parent)?.FullName : null;
+                        if (grandParent != null && File.Exists(Path.Combine(grandParent, "ColdClientLoader.ini")))
+                            gameDir = grandParent;
+                    }
                 }
 
                 foreach (var file in steamclientFiles)
@@ -1090,6 +1147,10 @@ namespace GoldbergGUI.Core.Services
                     foreach (var file in steamclientFiles)
                         DeleteIfExists(Path.Combine(gameDir, file));
                     ForceDeleteDirectory(Path.Combine(gameDir, "extra_dlls"));
+                    // Also remove steam_settings written beside steamclient64.dll
+                    var gameDirSettings = Path.Combine(gameDir, "steam_settings");
+                    if (Directory.Exists(gameDirSettings))
+                        ForceDeleteDirectory(gameDirSettings);
                 }
             }).ConfigureAwait(false);
 
@@ -1179,12 +1240,16 @@ namespace GoldbergGUI.Core.Services
                     "steamclient_loader.exe", "steamclient_loader64.exe",
                     "steamclient.dll", "steamclient64.dll",
                     "GameOverlayRenderer.dll", "GameOverlayRenderer64.dll",
-                    "ColdClientLoader.ini"
+                    "ColdClientLoader.ini", "version.dll"
                 })
                     DeleteIfExists(Path.Combine(path, file));
 
-                // Remove extra_dlls folder
                 ForceDeleteDirectory(Path.Combine(path, "extra_dlls"));
+
+                // Remove steam_settings written beside steamclient64.dll
+                var settingsDir = Path.Combine(path, "steam_settings");
+                if (Directory.Exists(settingsDir))
+                    ForceDeleteDirectory(settingsDir);
             }).ConfigureAwait(false);
             _log.Info("Steamclient mode reverted.");
         }
@@ -1420,7 +1485,7 @@ namespace GoldbergGUI.Core.Services
             var fileName   = Path.GetFileName(imageUrl);
             var targetPath = Path.Combine(imageFolder, fileName);
             if (File.Exists(targetPath)) return;
-            if (imageUrl.StartsWith("images/"))
+            if (imageUrl.StartsWith("images/") || imageUrl.StartsWith("achievement_images/"))
             {
                 _log.Warn($"Previously downloaded image '{imageUrl}' is now missing!");
                 return;

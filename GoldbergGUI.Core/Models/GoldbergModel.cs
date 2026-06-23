@@ -80,6 +80,12 @@ namespace GoldbergGUI.Core.Models
 
         public GoldbergGlobalConfiguration OverwrittenGlobalConfiguration { get; set; }
 
+        /// <summary>Steam-supported language codes (one per line in supported_languages.txt).</summary>
+        public List<string> SupportedLanguages { get; set; }
+
+        /// <summary>Raw JSON string for branches.json (gbe_fork beta-branch data).</summary>
+        public string BranchesJson { get; set; }
+
         // RUNE-specific controller settings (written to [Controller] in steam_emu.ini)
         public bool RuneControllerEnabled { get; set; } = true;
         public bool RuneControllerRumble { get; set; } = true;

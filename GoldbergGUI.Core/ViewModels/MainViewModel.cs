@@ -900,6 +900,19 @@ namespace GoldbergGUI.Core.ViewModels
                 RuneControllerRightTriggerDeadzone  = RuneControllerRightTriggerDeadzone,
             };
 
+            // Fetch supplementary Steam data in parallel (stats, branches, supported languages)
+            if (AppId > 0)
+            {
+                StatusText = "Fetching supplementary data from Steam...";
+                var statsTask     = _steam.GetStats(AppId);
+                var branchesTask  = _steam.GetBranchesJson(AppId);
+                var languagesTask = _steam.GetSupportedLanguages(AppId);
+                await Task.WhenAll(statsTask, branchesTask, languagesTask).ConfigureAwait(false);
+                config.Stats              = statsTask.Result;
+                config.BranchesJson       = branchesTask.Result;
+                config.SupportedLanguages = languagesTask.Result;
+            }
+
             if (UseRuneMode)
             {
                 // RUNE mode: clean up gbe_fork if present, then apply RUNE
@@ -912,11 +925,13 @@ namespace GoldbergGUI.Core.ViewModels
             }
             else if (UseSteamclientMode)
             {
-                // Clean up RUNE if present before applying gbe_fork steamclient mode
+                // Clean up RUNE and normal gbe_fork if present before applying steamclient mode
                 if (_goldberg.RuneApplied(dirPath))
                     await _goldberg.RevertRune(dirPath).ConfigureAwait(false);
-                // Steamclient mode: restore original steam_api.dll, then set up loader
-                await _goldberg.RevertDllOnly(dirPath).ConfigureAwait(true);
+                if (_goldberg.GoldbergApplied(dirPath))
+                    await _goldberg.Revert(dirPath).ConfigureAwait(false);
+                else
+                    await _goldberg.RevertDllOnly(dirPath).ConfigureAwait(true);
                 string gameDir;
                 if (!_goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath)))
                 {
@@ -1000,7 +1015,7 @@ namespace GoldbergGUI.Core.ViewModels
                 _steamclientGameDir = null;
                 GoldbergApplied = _goldberg.GoldbergApplied(dirPath);
                 RuneApplied = _goldberg.RuneApplied(dirPath);
-                SteamclientModeApplied = _goldberg.SteamclientModeApplied(dirPath);
+                SteamclientModeApplied = _goldberg.SteamclientModeApplied(GetSteamclientGameDir(dirPath));
 
                 AppId = -1;
                 Achievements = new ObservableCollection<Achievement>();

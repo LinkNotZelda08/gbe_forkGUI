@@ -9,6 +9,7 @@ using SteamStorefrontAPI;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -37,6 +38,12 @@ namespace GoldbergGUI.Core.Services
         /// the template index and human-readable name so the UI can inform the user.
         /// </summary>
         public Task<(List<ControllerActionSet> ActionSets, int? TemplateIndex, string TemplateName)> GetControllerConfig(int appId);
+        /// <summary>Returns the game's stats from the Steam schema API as a list of <see cref="Stat"/>.</summary>
+        public Task<List<Stat>> GetStats(int appId);
+        /// <summary>Returns a gbe_fork-formatted branches.json string from ISteamApps/GetAppBetas, or null on failure.</summary>
+        public Task<string> GetBranchesJson(int appId);
+        /// <summary>Returns the Steam language codes supported by the app (for supported_languages.txt), or null on failure.</summary>
+        public Task<List<string>> GetSupportedLanguages(int appId);
     }
 
     class SteamCache
@@ -973,6 +980,149 @@ namespace GoldbergGUI.Core.Services
             _log.Info($"Downloading VDF from {fileUrl}");
             return await _httpClient.GetStringAsync(fileUrl).ConfigureAwait(false);
         }
+
+        // -----------------------------------------------------------------------
+        // Stats / Branches / Supported-languages helpers
+        // -----------------------------------------------------------------------
+
+        public async Task<List<Stat>> GetStats(int appId)
+        {
+            var result = new List<Stat>();
+            try
+            {
+                var apiUrl = $"{GameSchemaUrl}?key={Secrets.SteamWebApiKey()}&appid={appId}&l=en";
+                var response = await _httpClient.GetAsync(apiUrl).ConfigureAwait(false);
+                var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty("game", out var game)) return result;
+                if (!game.TryGetProperty("availableGameStats", out var gameStats)) return result;
+                if (!gameStats.TryGetProperty("stats", out var statsEl) ||
+                    statsEl.ValueKind != JsonValueKind.Array) return result;
+
+                foreach (var statEl in statsEl.EnumerateArray())
+                {
+                    var stat = new Stat { StatTypeSetting = Stat.StatType.Int };
+                    if (statEl.TryGetProperty("name", out var n)) stat.Name = n.GetString();
+                    if (statEl.TryGetProperty("defaultvalue", out var dv)) stat.Value = dv.GetRawText();
+                    result.Add(stat);
+                }
+                _log.Info($"GetStats({appId}): {result.Count} stat(s).");
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"GetStats({appId}): {e.Message}");
+            }
+            return result;
+        }
+
+        public async Task<string> GetBranchesJson(int appId)
+        {
+            try
+            {
+                var url = "https://api.steampowered.com/ISteamApps/GetAppBetas/v1/" +
+                          $"?appid={appId}&key={Uri.EscapeDataString(Secrets.SteamWebApiKey())}";
+                var body = await _httpClient.GetStringAsync(url).ConfigureAwait(false);
+                _log.Debug($"[GetBranches] {body[..Math.Min(300, body.Length)]}");
+
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty("response", out var resp)) return null;
+                if (!resp.TryGetProperty("betas", out var betas) ||
+                    betas.ValueKind != JsonValueKind.Object) return null;
+
+                var branches = new Dictionary<string, object>();
+                foreach (var entry in betas.EnumerateObject())
+                {
+                    var b = entry.Value;
+                    branches[entry.Name] = new Dictionary<string, object>
+                    {
+                        ["build_id"]          = b.TryGetProperty("BuildID",           out var bid) ? bid.GetInt64()     : 0L,
+                        ["description"]       = b.TryGetProperty("Description",       out var d)   ? d.GetString() ?? "" : "",
+                        ["password_required"] = b.TryGetProperty("PasswordProtected", out var pw)  && pw.GetBoolean(),
+                        ["time_updated"]      = b.TryGetProperty("TimeUpdated",       out var tu)  ? tu.GetInt64()     : 0L
+                    };
+                }
+
+                if (branches.Count == 0) return null;
+                _log.Info($"GetBranchesJson({appId}): {branches.Count} branch(es).");
+                return JsonSerializer.Serialize(branches, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"GetBranchesJson({appId}): {e.Message}");
+                return null;
+            }
+        }
+
+        public async Task<List<string>> GetSupportedLanguages(int appId)
+        {
+            try
+            {
+                var url = $"https://store.steampowered.com/api/appdetails/?appids={appId}";
+                var body = await _httpClient.GetStringAsync(url).ConfigureAwait(false);
+
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty(appId.ToString(), out var appData)) return null;
+                if (!appData.TryGetProperty("success", out var suc) || !suc.GetBoolean()) return null;
+                if (!appData.TryGetProperty("data", out var data)) return null;
+                if (!data.TryGetProperty("supported_languages", out var langsProp)) return null;
+
+                var langsHtml = langsProp.GetString();
+                if (string.IsNullOrEmpty(langsHtml)) return null;
+
+                var result = Regex.Replace(langsHtml, "<[^>]+>", "")
+                    .Split(',')
+                    .Select(s => s.Trim())
+                    .Where(s => s.Length > 0)
+                    .Select(MapDisplayNameToSteamCode)
+                    .Where(code => code != null)
+                    .Distinct()
+                    .ToList();
+
+                _log.Info($"GetSupportedLanguages({appId}): {result.Count} language(s).");
+                return result.Count > 0 ? result : null;
+            }
+            catch (Exception e)
+            {
+                _log.Warn($"GetSupportedLanguages({appId}): {e.Message}");
+                return null;
+            }
+        }
+
+        private static string MapDisplayNameToSteamCode(string displayName) =>
+            displayName.ToLowerInvariant() switch
+            {
+                "english"                 => "english",
+                "french"                  => "french",
+                "german"                  => "german",
+                "spanish - spain"         => "spanish",
+                "spanish - latin america" => "latam",
+                "simplified chinese"      => "schinese",
+                "traditional chinese"     => "tchinese",
+                "portuguese - brazil"     => "brazilian",
+                "portuguese"              => "portuguese",
+                "italian"                 => "italian",
+                "dutch"                   => "dutch",
+                "polish"                  => "polish",
+                "russian"                 => "russian",
+                "romanian"                => "romanian",
+                "czech"                   => "czech",
+                "hungarian"               => "hungarian",
+                "danish"                  => "danish",
+                "swedish"                 => "swedish",
+                "norwegian"               => "norwegian",
+                "finnish"                 => "finnish",
+                "greek"                   => "greek",
+                "turkish"                 => "turkish",
+                "ukrainian"               => "ukrainian",
+                "japanese"                => "japanese",
+                "korean"                  => "koreana",
+                "thai"                    => "thai",
+                "arabic"                  => "arabic",
+                "bulgarian"               => "bulgarian",
+                "vietnamese"              => "vietnamese",
+                _                         => null
+            };
 
         private static string PrepareStringToCompare(string name)
         {
