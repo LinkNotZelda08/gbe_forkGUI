@@ -104,7 +104,7 @@ namespace GoldbergGUI.Core.Services
 
         static SteamService()
         {
-            _httpClient = new HttpClient();
+            _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         }
         private const string AppTypeDlc = "dlc";

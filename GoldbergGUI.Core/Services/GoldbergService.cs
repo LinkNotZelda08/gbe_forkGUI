@@ -67,7 +67,9 @@ namespace GoldbergGUI.Core.Services
         private readonly string _goldbergPath    = Path.Combine(Directory.GetCurrentDirectory(), "goldberg");
         private readonly string _runePath        = Path.Combine(Directory.GetCurrentDirectory(), "rune");
         private readonly string _steamstubPath   = Path.Combine(Directory.GetCurrentDirectory(), "steamstub");
+#if !NO_ALI213
         private readonly string _ali213Path      = Path.Combine(Directory.GetCurrentDirectory(), "ali213");
+#endif
 
         private bool _downloadAchievementImages = true;
 
@@ -84,7 +86,7 @@ namespace GoldbergGUI.Core.Services
 
         static GoldbergService()
         {
-            _httpClient = new HttpClient();
+            _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "GoldbergGUI");
         }
 
@@ -2009,6 +2011,20 @@ namespace GoldbergGUI.Core.Services
         // ALI213 emulator support
         // -----------------------------------------------------------------------
 
+#if NO_ALI213
+        public Task ApplyAli213(string path, GoldbergConfiguration config,
+            string accountName, long steamId, string language)
+        {
+            MessageBox.Show(
+                "ALI213 support is not included in this build.",
+                "ALI213 Unavailable", MessageBoxButton.OK, MessageBoxImage.Information);
+            return Task.CompletedTask;
+        }
+
+        public Task RevertAli213(string path) => Task.CompletedTask;
+
+        public bool Ali213Applied(string path) => false;
+#else
         public async Task ApplyAli213(string path, GoldbergConfiguration config,
             string accountName, long steamId, string language)
         {
@@ -2096,6 +2112,7 @@ namespace GoldbergGUI.Core.Services
             File.Exists(Path.Combine(path, "SteamConfig.ini")) &&
             (File.Exists(Path.Combine(path, "steam_api64.ali")) ||
              File.Exists(Path.Combine(path, "steam_api.ali")));
+#endif
 
         private string BuildAli213Ini(int appId, string accountName, string language,
             GoldbergConfiguration config, long steamId)

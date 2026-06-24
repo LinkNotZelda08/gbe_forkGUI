@@ -12,6 +12,12 @@
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
   </PropertyGroup>
 
+  <!-- NoALI213 build configuration: strips ALI213 DLLs from output and stubs the feature -->
+  <PropertyGroup Condition="'$(Configuration)'=='NoALI213' Or '$(Configuration)'=='NoALI213Release'">
+    <DefineConstants>$(DefineConstants);NO_ALI213</DefineConstants>
+    <Optimize Condition="'$(Configuration)'=='NoALI213Release'">true</Optimize>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="MvvmCross.Platforms.Wpf" Version="7.1.2" />
     <PackageReference Include="Serilog" Version="4.3.1" />
@@ -24,7 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="ali213\**">
+    <Content Include="ali213\**" Condition="'$(Configuration)'!='NoALI213' And '$(Configuration)'!='NoALI213Release'">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <Content Include="rune\**">

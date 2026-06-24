@@ -9,6 +9,11 @@
 		<IsPublishable>false</IsPublishable>
 	</PropertyGroup>
 
+	<!-- Inherit NO_ALI213 symbol when built under NoALI213 / NoALI213Release configurations -->
+	<PropertyGroup Condition="'$(Configuration)'=='NoALI213' Or '$(Configuration)'=='NoALI213Release'">
+		<DefineConstants>$(DefineConstants);NO_ALI213</DefineConstants>
+	</PropertyGroup>
+
 	<ItemGroup>
 		<PackageReference Include="AngleSharp" Version="1.4.0" />
 		<PackageReference Include="MvvmCross" Version="7.1.2" />

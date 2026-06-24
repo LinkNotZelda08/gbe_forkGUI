@@ -38,6 +38,7 @@
                                  ToolTip="Use RUNE emulator (steam_emu.ini + version.dll)"/>
                     <RadioButton Content="_ALI213" IsChecked="{Binding UseAli213Mode, Mode=TwoWay}"
                                  VerticalAlignment="Center"
+                                 Visibility="{x:Static utils:BuildFeatures.Ali213Visibility}"
                                  ToolTip="Use ALI213 emulator (SteamConfig.ini)"/>
                 </StackPanel>
             </Border>
@@ -714,6 +715,7 @@
                     <CheckBox Content="gbe__fork applied" IsChecked="{Binding GoldbergApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
                     <CheckBox Content="RUNE applied" IsChecked="{Binding RuneApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"/>
                     <CheckBox Content="ALI213 applied" IsChecked="{Binding Ali213Applied}" IsEnabled="False" Height="20" VerticalAlignment="Center" Margin="0,0,15,0"
+                              Visibility="{x:Static utils:BuildFeatures.Ali213Visibility}"
                               ToolTip="Read-only: indicates whether ALI213 emulator is currently applied in the selected game directory"/>
                     <CheckBox Content="Steamclient mode" IsChecked="{Binding SteamclientModeApplied}" IsEnabled="False" Height="20" VerticalAlignment="Center"/>
                 </StackPanel>
